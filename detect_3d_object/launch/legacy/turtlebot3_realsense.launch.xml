@@ -1,0 +1,30 @@
+<!-- example.launch.xml -->
+
+<launch>
+
+  <!-- args that can be set from the command line or a default will be used -->
+  <arg name="tb_ns" default="turtlebot1"/>
+  <arg name="dp_cam" default="depth_camera"/>
+
+  <group>
+    <!-- push-ros-namespace to set namespace of included nodes -->
+    <push-ros-namespace namespace="$(var tb_ns)"/>
+    <!-- include another launch file -->
+    <node pkg="realsense2_camera" exec="realsense2_camera_node">
+      <param name="depth_module.depth_profile" value="640x480x30"/>
+    </node>    
+    <!-- include file="$(find-pkg-share realsense2_camera)/launch/rs_launch.py">
+      <arg name="device_typ" value="D435"/>
+      <arg name="enable_rgbd" value="true"/>
+      <arg name="enable_sync" value="true"/>
+      <arg name="align_depth.enable" value="true"/>
+      <arg name="enable_color" value="true"/>
+      <arg name="enable_depth" value="true"/>
+      <arg name="pointcloud.enable" value="false"/>
+    </include -->
+
+    <include file="$(find-pkg-share turtlebot3_bringup)/launch/robot.launch.py"/>
+
+  </group>
+
+</launch>

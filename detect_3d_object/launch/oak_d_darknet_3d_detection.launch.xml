@@ -1,0 +1,26 @@
+<!-- example.launch.xml -->
+
+<launch>
+
+  <arg name="dp_cam" default="depth_camera"/>
+
+  <include file="$(find-pkg-share depthai_ros_driver)/launch/camera.launch.py">
+    <arg name="camera_model" value="OAK-D-PRO-W"/>
+    <arg name="parent_frame" value="base_link"/>
+    <arg name="rectify_rgb"  value="false"/>
+  </include>
+  
+  <include file="$(find-pkg-share openrobotics_darknet_ros)/detector_launch.py">
+    <arg name="rgb_image" value="oak/rgb/image_raw"/>
+  </include>
+
+  <!-- start a detect_3d_object in the tb namespace -->
+  <node pkg="detect_3d_object" exec="detect_3d_object_node" name="detect_3d_object"> <!-- namespace="$(var tb_ns)" -->
+    <remap from="/depth/image" to="oak/stereo/image_raw"/>
+    <remap from="/depth/camera_info" to="oak/stereo/camera_info"/>
+    <remap from="/color/image" to="oak/rgb/image_raw"/>
+    <param name="parent_frame" value="base_link"/>
+  </node>
+
+
+</launch>

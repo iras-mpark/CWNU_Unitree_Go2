@@ -1,0 +1,18 @@
+<!-- example.launch.xml -->
+
+<launch>
+
+  <!-- args that can be set from the command line or a default will be used -->
+  <arg name="tb_ns" default="turtlebot1"/>
+  <arg name="dp_cam" default="depth_camera"/>
+
+  <include file="$(find-pkg-share turtlebot3_manipulation_bringup)/launch/hardware.launch.py"/>
+
+  <include file="$(find-pkg-share depthai_ros_driver)/launch/camera.launch.py">
+    <arg name="camera_model" value="OAK-D-PRO-W"/>
+    <arg name="parent_frame" value="base_link"/>
+    <arg name="rectify_rgb"  value="false"/>
+  </include>
+
+
+</launch>

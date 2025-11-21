@@ -1,0 +1,15 @@
+<!-- example.launch.xml -->
+
+<launch>
+
+  <node pkg="detect_3d_object" exec="detect_3d_object_node" name="detect_3d_object">
+    <remap from="/depth/image" to="oak/stereo/image_raw"/>
+    <remap from="/depth/camera_info" to="oak/stereo/camera_info"/>
+    <remap from="/color/image" to="oak/rgb/image_raw"/>
+    <param name="parent_frame" value="base_link"/>
+    <param name="use_sim_time" value="true"/>
+    <param name="goal_object_class" value="suitcase"/>
+    <param name="goal_object_identifier" value="person_1"/>
+  </node>
+
+</launch>

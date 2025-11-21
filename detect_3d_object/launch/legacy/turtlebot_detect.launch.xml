@@ -1,0 +1,9 @@
+<launch>
+
+  <!-- args that can be set from the command line or a default will be used -->
+
+  <include file="$(find-pkg-share detect_3d_object)/launch/turtlebot3_oak_d.launch.xml"/>
+
+  <include file="$(find-pkg-share detect_3d_object)/launch/darknet_3d_detection.launch.xml"/>
+
+</launch>

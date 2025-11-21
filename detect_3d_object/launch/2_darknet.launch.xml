@@ -1,0 +1,9 @@
+<!-- example.launch.xml -->
+
+<launch>
+  
+  <include file="$(find-pkg-share openrobotics_darknet_ros)/detector_launch.py">
+    <arg name="rgb_image" value="oak/rgb/image_raw"/>
+  </include>
+
+</launch>

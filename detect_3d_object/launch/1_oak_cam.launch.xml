@@ -1,0 +1,16 @@
+<!-- example.launch.xml -->
+
+<launch>
+
+  <node pkg="detect_3d_object" exec="local_clock_publisher" name="local_clock_publisher" output="screen">
+    <param name="clock_frequency" value="100.0"/>
+    <param name="use_sim_time" value="false"/>
+  </node>
+
+  <include file="$(find-pkg-share depthai_ros_driver)/launch/camera.launch.py">
+    <arg name="camera_model" value="OAK-D-PRO-W"/>
+    <arg name="parent_frame" value="base_link"/>
+    <arg name="rectify_rgb"  value="false"/>
+  </include>
+
+</launch>

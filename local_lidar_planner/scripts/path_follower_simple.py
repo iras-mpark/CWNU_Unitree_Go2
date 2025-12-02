@@ -31,7 +31,6 @@ class SimplePathFollower(Node):
         self.declare_parameter("angular_gain", 1.5)
         self.declare_parameter("max_yaw_rate", 1.0)  # rad/s
         self.declare_parameter("heading_tolerance", 0.05)
-        self.declare_parameter("pitch_tolerance", 0.05)
         self.declare_parameter("is_real_robot", False)
         self.declare_parameter("target_topic", "/goal_target")
         self.declare_parameter("translation_stop_distance", 1.0)
@@ -45,7 +44,6 @@ class SimplePathFollower(Node):
         self.angular_gain = self.get_parameter("angular_gain").get_parameter_value().double_value
         self.max_yaw_rate = self.get_parameter("max_yaw_rate").get_parameter_value().double_value
         self.heading_tolerance = self.get_parameter("heading_tolerance").get_parameter_value().double_value
-        self.pitch_tolerance = self.get_parameter("pitch_tolerance").get_parameter_value().double_value
         self.is_real_robot = self.get_parameter("is_real_robot").get_parameter_value().bool_value
         target_topic_param = self.get_parameter("target_topic").get_parameter_value().string_value
         self.target_topic = target_topic_param or "/goal_target"
@@ -56,7 +54,7 @@ class SimplePathFollower(Node):
         publish_rate = self.get_parameter("publish_rate_hz").get_parameter_value().double_value
 
         self.current_path: Optional[Path] = None
-        self._latest_target_point: Optional[Tuple[float, float, float]] = None
+        self._latest_target_point: Optional[Tuple[float, float]] = None
         self.request_seq = 0
 
         self.create_subscription(Path, "/path", self._path_callback, 5)
@@ -92,22 +90,18 @@ class SimplePathFollower(Node):
         target_point = self._latest_target_point
         target_distance = None
         heading_to_target = None
-        pitch_to_target = None
         if target_point is not None:
             target_distance = math.hypot(target_point[0], target_point[1])
             heading_to_target = self._compute_heading_error(target_point[0], target_point[1])
-            pitch_to_target = self._compute_pitch_error(target_point[0], target_point[1], target_point[2])
         if heading_to_target is None:
             heading_to_target = self._compute_heading_error(last_pose.x, last_pose.y)
-        if pitch_to_target is None:
-            pitch_to_target = self._compute_pitch_error(last_pose.x, last_pose.y, getattr(last_pose, "z", 0.0))
 
         if target_distance is not None and target_distance <= self.translation_stop_distance:
-            self._publish_orientation_only(cmd, heading_to_target, pitch_to_target)
+            self._publish_heading_only(cmd, heading_to_target)
             return
 
         if goal_distance < self.goal_tolerance:
-            self._publish_orientation_only(cmd, heading_to_target, pitch_to_target)
+            self._publish_heading_only(cmd, heading_to_target)
             return
 
         target = self._select_target_point(self.current_path)
@@ -135,26 +129,15 @@ class SimplePathFollower(Node):
     def _compute_heading_error(self, target_x: float, target_y: float) -> float:
         return math.atan2(target_y, target_x)
 
-    def _compute_pitch_error(self, target_x: float, target_y: float, target_z: float) -> float:
-        forward_distance = math.hypot(target_x, target_y)
-        return math.atan2(target_z, forward_distance)
-
     def _apply_heading_gain(self, heading_error: float) -> float:
         yaw_rate = self.angular_gain * heading_error
         return max(-self.max_yaw_rate, min(self.max_yaw_rate, yaw_rate))
 
-    def _publish_orientation_only(self, cmd: TwistStamped, yaw_error: float, pitch_error: float) -> None:
-        cmd.twist.linear.x = 0.0
-        cmd.twist.linear.y = 0.0
-        cmd.twist.angular.z = 0.0
+    def _publish_heading_only(self, cmd: TwistStamped, heading_error: float) -> None:
+        if abs(heading_error) > self.heading_tolerance:
+            cmd.twist.angular.z = self._apply_heading_gain(heading_error)
         self.cmd_pub.publish(cmd)
-        if not self.is_real_robot:
-            return
-
-        needs_orientation = abs(yaw_error) > self.heading_tolerance or abs(pitch_error) > self.pitch_tolerance
-        if needs_orientation:
-            self._publish_orientation_request(0.0, pitch_error, yaw_error)
-        else:
+        if self.is_real_robot:
             self._publish_sport_request(cmd)
 
     def _target_callback(self, msg: PointStamped) -> None:
@@ -162,7 +145,7 @@ class SimplePathFollower(Node):
             self.get_logger().warn_once(
                 f"Received goal target in '{msg.header.frame_id}' but follower expects '{self.path_frame}'."
             )
-        self._latest_target_point = (msg.point.x, msg.point.y, msg.point.z)
+        self._latest_target_point = (msg.point.x, msg.point.y)
 
     def _publish_sport_request(self, cmd: TwistStamped) -> None:
         req = Request()
@@ -180,14 +163,6 @@ class SimplePathFollower(Node):
             req.parameter = json.dumps(
                 {"x": cmd.twist.linear.x, "y": cmd.twist.linear.y, "z": cmd.twist.angular.z}
             )
-        self.request_pub.publish(req)
-
-    def _publish_orientation_request(self, roll: float, pitch: float, yaw: float) -> None:
-        req = Request()
-        req.header.identity.id = self.request_seq
-        self.request_seq += 1
-        req.header.identity.api_id = 1007
-        req.parameter = json.dumps({"x": roll, "y": pitch, "z": yaw})
         self.request_pub.publish(req)
 
 

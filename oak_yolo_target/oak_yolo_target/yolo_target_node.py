@@ -57,6 +57,7 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("target_point_topic", "/local_goal_point")
         self.declare_parameter("target_status_topic", "/target/status")
         self.declare_parameter("debug_image_topic", "/target/debug_image/compressed")
+        self.declare_parameter("debug_raw_image_topic", "/target/debug_image")
         self.declare_parameter("target_frame", "base_link")
 
         # Model / inference parameters.  For Jetson, pass a TensorRT .engine path
@@ -97,6 +98,7 @@ class OakYoloTargetNode(Node):
 
         # Debug image publication.
         self.declare_parameter("publish_debug_image", True)
+        self.declare_parameter("publish_debug_raw_image", True)
         self.declare_parameter("debug_image_rate_hz", 5.0)
         self.declare_parameter("debug_jpeg_quality", 35)
         self.declare_parameter("debug_resize_width", 640)
@@ -107,6 +109,7 @@ class OakYoloTargetNode(Node):
         self.target_point_topic = self.get_parameter("target_point_topic").value
         self.target_status_topic = self.get_parameter("target_status_topic").value
         self.debug_image_topic = self.get_parameter("debug_image_topic").value
+        self.debug_raw_image_topic = self.get_parameter("debug_raw_image_topic").value
         self.target_frame = self.get_parameter("target_frame").value
 
         self.bridge = CvBridge()
@@ -130,6 +133,7 @@ class OakYoloTargetNode(Node):
         self.target_pub = self.create_publisher(PointStamped, self.target_point_topic, 10)
         self.status_pub = self.create_publisher(String, self.target_status_topic, 10)
         self.debug_pub = self.create_publisher(CompressedImage, self.debug_image_topic, 3)
+        self.debug_raw_pub = self.create_publisher(Image, self.debug_raw_image_topic, 3)
 
         self.get_logger().info(
             f"OAK YOLO target node ready: rgb={self.rgb_topic}, depth={self.depth_topic}, "
@@ -541,6 +545,12 @@ class OakYoloTargetNode(Node):
         if resize_w > 0 and vis.shape[1] > resize_w:
             scale = resize_w / float(vis.shape[1])
             vis = cv2.resize(vis, (resize_w, int(round(vis.shape[0] * scale))))
+
+        if bool(self.get_parameter("publish_debug_raw_image").value):
+            raw_msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
+            raw_msg.header.stamp = stamp
+            raw_msg.header.frame_id = self.target_frame
+            self.debug_raw_pub.publish(raw_msg)
 
         quality = int(self.get_parameter("debug_jpeg_quality").value)
         quality = int(np.clip(quality, 5, 95))

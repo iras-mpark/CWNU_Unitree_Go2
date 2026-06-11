@@ -30,6 +30,11 @@ try:
 except Exception:  # pragma: no cover - handled at runtime on robot
     YOLO = None
 
+try:
+    import torch
+except Exception:  # pragma: no cover - CPU-only or TensorRT-only environments
+    torch = None
+
 
 @dataclass
 class PersonCandidate:
@@ -65,7 +70,7 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("model_path", "yolo11n.pt")
         self.declare_parameter("fallback_model_path", "")
         self.declare_parameter("tracker", "bytetrack.yaml")
-        self.declare_parameter("device", "0")
+        self.declare_parameter("device", "auto")
         self.declare_parameter("imgsz", 640)
         self.declare_parameter("conf_threshold", 0.35)
         self.declare_parameter("iou_threshold", 0.5)
@@ -114,6 +119,9 @@ class OakYoloTargetNode(Node):
 
         self.bridge = CvBridge()
         self.model = self._load_model()
+        self.inference_device = self._resolve_inference_device(str(self.get_parameter("device").value))
+        self.inference_half = self._resolve_half_precision(bool(self.get_parameter("half").value))
+        self._last_yolo_error: str = ""
         self.latest_depth: Optional[np.ndarray] = None
         self.latest_depth_encoding: str = ""
         self.latest_camera_info: Optional[CameraInfo] = None
@@ -165,6 +173,56 @@ class OakYoloTargetNode(Node):
                 return model
             raise
 
+    def _resolve_inference_device(self, requested: str) -> str:
+        """Return a safe Ultralytics device string.
+
+        ROS launch defaults to 'auto'.  On Jetson it is common for a CUDA device
+        to be physically visible while the active Python/PyTorch installation is
+        not CUDA-enabled.  In that case Ultralytics rejects device='0', so we must
+        fall back to CPU instead of failing every frame.
+        """
+        req = (requested or "auto").strip().lower()
+        if req == "none":
+            req = "auto"
+        if req == "cpu":
+            self.get_logger().warn("YOLO inference device forced to CPU.")
+            return "cpu"
+
+        cuda_ok = bool(torch is not None and torch.cuda.is_available())
+        cuda_count = int(torch.cuda.device_count()) if torch is not None else 0
+
+        if req in ("auto", "cuda", "gpu"):
+            if cuda_ok and cuda_count > 0:
+                self.get_logger().info(f"YOLO inference device auto-selected: 0 ({cuda_count} CUDA device(s) visible)")
+                return "0"
+            self.get_logger().warn(
+                "CUDA was requested/auto-selected, but torch.cuda.is_available() is False. "
+                "Falling back to device='cpu'. YOLO will run slower until the Jetson PyTorch/CUDA "
+                "environment is fixed or a TensorRT engine is used."
+            )
+            return "cpu"
+
+        # Numeric strings such as '0' are valid only if PyTorch can actually use CUDA.
+        if req.replace(",", "").replace(" ", "").isdigit():
+            if cuda_ok:
+                self.get_logger().info(f"YOLO inference device requested: {requested}")
+                return requested
+            self.get_logger().warn(
+                f"YOLO device='{requested}' was requested, but torch.cuda.is_available() is False. "
+                "Using CPU fallback to keep detection running."
+            )
+            return "cpu"
+
+        # Let Ultralytics handle uncommon backend-specific values, but log them.
+        self.get_logger().warn(f"Using non-standard YOLO device argument: {requested}")
+        return requested
+
+    def _resolve_half_precision(self, requested_half: bool) -> bool:
+        if self.inference_device == "cpu" and requested_half:
+            self.get_logger().warn("Disabling half=True because YOLO is running on CPU.")
+            return False
+        return bool(requested_half)
+
     # ---------------------------------------------------------------- callbacks
     def _depth_callback(self, msg: Image) -> None:
         try:
@@ -205,40 +263,24 @@ class OakYoloTargetNode(Node):
         person_class_id = int(self.get_parameter("person_class_id").value)
         conf = float(self.get_parameter("conf_threshold").value)
         iou = float(self.get_parameter("iou_threshold").value)
-        device = str(self.get_parameter("device").value)
+        device = self.inference_device
         imgsz = int(self.get_parameter("imgsz").value)
         tracker = str(self.get_parameter("tracker").value)
-        half = bool(self.get_parameter("half").value)
+        half = self.inference_half
         verbose = bool(self.get_parameter("show_yolo_logs").value)
 
-        try:
-            results = self.model.track(
-                frame,
-                persist=True,
-                classes=[person_class_id],
-                conf=conf,
-                iou=iou,
-                imgsz=imgsz,
-                device=device,
-                half=half,
-                tracker=tracker,
-                verbose=verbose,
-            )
-        except TypeError:
-            # Some exported backends do not accept every keyword.
-            results = self.model.track(
-                frame,
-                persist=True,
-                classes=[person_class_id],
-                conf=conf,
-                iou=iou,
-                imgsz=imgsz,
-                device=device,
-                tracker=tracker,
-                verbose=verbose,
-            )
-        except Exception as exc:
-            self._warn_throttled(f"YOLO tracking failed: {exc}")
+        results = self._track_with_fallback(
+            frame=frame,
+            person_class_id=person_class_id,
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            device=device,
+            half=half,
+            tracker=tracker,
+            verbose=verbose,
+        )
+        if results is None:
             return []
 
         if not results:
@@ -288,6 +330,69 @@ class OakYoloTargetNode(Node):
                 )
             )
         return candidates
+
+    def _track_with_fallback(
+        self,
+        frame: np.ndarray,
+        person_class_id: int,
+        conf: float,
+        iou: float,
+        imgsz: int,
+        device: str,
+        half: bool,
+        tracker: str,
+        verbose: bool,
+    ) -> Optional[Any]:
+        kwargs = dict(
+            source=frame,
+            persist=True,
+            classes=[person_class_id],
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            device=device,
+            tracker=tracker,
+            verbose=verbose,
+        )
+        if half:
+            kwargs["half"] = True
+
+        try:
+            self._last_yolo_error = ""
+            return self.model.track(**kwargs)
+        except TypeError:
+            # Some exported backends do not accept every keyword. Retry without half.
+            kwargs.pop("half", None)
+            try:
+                self._last_yolo_error = ""
+                return self.model.track(**kwargs)
+            except Exception as exc:
+                return self._handle_track_exception_and_retry(frame, kwargs, exc)
+        except Exception as exc:
+            return self._handle_track_exception_and_retry(frame, kwargs, exc)
+
+    def _handle_track_exception_and_retry(self, frame: np.ndarray, kwargs: Dict[str, Any], exc: Exception) -> Optional[Any]:
+        text = str(exc)
+        self._last_yolo_error = text
+        cuda_error = "Invalid CUDA" in text or "CUDA" in text or "cuda" in text
+        if kwargs.get("device") != "cpu" and cuda_error:
+            self._warn_throttled(
+                f"YOLO tracking failed on device={kwargs.get('device')}: {text}. Retrying on CPU."
+            )
+            self.inference_device = "cpu"
+            self.inference_half = False
+            kwargs["device"] = "cpu"
+            kwargs.pop("half", None)
+            try:
+                self._last_yolo_error = ""
+                return self.model.track(**kwargs)
+            except Exception as cpu_exc:
+                self._last_yolo_error = str(cpu_exc)
+                self._warn_throttled(f"YOLO CPU fallback also failed: {cpu_exc}")
+                return None
+
+        self._warn_throttled(f"YOLO tracking failed: {exc}")
+        return None
 
     def _estimate_depth_and_point(
         self, bbox_xyxy: Tuple[int, int, int, int], rgb_shape: Tuple[int, int, int]
@@ -476,6 +581,8 @@ class OakYoloTargetNode(Node):
             "tracked": bool(tracked),
             "locked_track_id": self.locked_track_id,
             "reason": reason,
+            "inference_device": self.inference_device,
+            "yolo_error": self._last_yolo_error,
             "stamp_monotonic": time.monotonic(),
         }
         if target is not None:
@@ -540,6 +647,28 @@ class OakYoloTargetNode(Node):
                 2,
                 cv2.LINE_AA,
             )
+            detail = f"candidates={len(candidates)} stable={self._candidate_count}/{int(self.get_parameter('acquire_stable_frames').value)} device={self.inference_device}"
+            cv2.putText(
+                vis,
+                detail,
+                (20, 65),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            if self._last_yolo_error:
+                cv2.putText(
+                    vis,
+                    "YOLO ERROR - see /target/status or terminal",
+                    (20, 95),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
 
         resize_w = int(self.get_parameter("debug_resize_width").value)
         if resize_w > 0 and vis.shape[1] > resize_w:

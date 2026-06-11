@@ -87,7 +87,7 @@ def generate_launch_description():
             'target_frame': LaunchConfiguration('target_frame'),
             'model_path': LaunchConfiguration('model_path'),
             'fallback_model_path': LaunchConfiguration('fallback_model_path'),
-            'device': LaunchConfiguration('device'),
+            'device': ParameterValue(LaunchConfiguration('device'), value_type=str),
             'imgsz': ParameterValue(LaunchConfiguration('imgsz'), value_type=int),
             'tracker': LaunchConfiguration('tracker'),
             'conf_threshold': ParameterValue(LaunchConfiguration('conf_threshold'), value_type=float),

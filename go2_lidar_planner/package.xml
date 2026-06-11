@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2_lidar_planner</name>
+  <version>0.1.0</version>
+  <description>Go2 LiDAR sliding-window potential-field A* planner and Unitree sport API follower.</description>
+  <maintainer email="oblivionwine@gmail.com">CWNU Go2 Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf_transformations</exec_depend>
+  <!-- unitree_api is optional at import time. It is required only when api_control_enabled:=true and /api/sport/request should be published. -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

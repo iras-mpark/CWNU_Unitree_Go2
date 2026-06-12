@@ -17,6 +17,7 @@ def generate_launch_description():
         DeclareLaunchArgument('path_topic', default_value='/path'),
         DeclareLaunchArgument('cmd_vel_topic', default_value='/cmd_vel'),
         DeclareLaunchArgument('sport_request_topic', default_value='/api/sport/request'),
+        DeclareLaunchArgument('follower_status_topic', default_value='/go2_follower/status'),
 
         # LiDAR mounting correction. Defaults preserve the original package's pitch.
         DeclareLaunchArgument('lidar_roll', default_value='0.0'),
@@ -43,7 +44,8 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacle_z_min_m', default_value='0.05'),
         DeclareLaunchArgument('obstacle_z_max_m', default_value='1.20'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
-        DeclareLaunchArgument('max_forward_speed_mps', default_value='0.60'),
+        DeclareLaunchArgument('require_target_status', default_value='false'),
+        DeclareLaunchArgument('max_forward_speed_mps', default_value='0.45'),
         DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.35'),
         DeclareLaunchArgument('max_yaw_rate_rps', default_value='1.0'),
         DeclareLaunchArgument('target_stale_timeout_s', default_value='0.6'),
@@ -120,6 +122,8 @@ def generate_launch_description():
             'path_topic': LaunchConfiguration('path_topic'),
             'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
             'sport_request_topic': LaunchConfiguration('sport_request_topic'),
+            'follower_status_topic': LaunchConfiguration('follower_status_topic'),
+            'require_target_status': ParameterValue(LaunchConfiguration('require_target_status'), value_type=bool),
             'cmd_frame': LaunchConfiguration('target_frame'),
         }],
     )

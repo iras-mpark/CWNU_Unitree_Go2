@@ -24,6 +24,7 @@ go2_lidar_planner     # LiDAR accumulation + potential-field A* + Go2 sport API 
     /local_goal_point
     /target/status
     /target/debug_image/compressed
+    /target/debug_image
 
                  ROS 2 DDS network
                        ↓
@@ -53,6 +54,7 @@ Both devices must be on the same ROS 2 network, with matching `ROS_DOMAIN_ID` an
   -> /local_goal_point geometry_msgs/PointStamped in base_link
   -> /target/status std_msgs/String JSON
   -> /target/debug_image/compressed sensor_msgs/CompressedImage
+  -> /target/debug_image sensor_msgs/Image
 
 /utlidar/cloud
   -> fixed mounting transform
@@ -243,6 +245,7 @@ The two devices should use the same `ROS_DOMAIN_ID`. DDS discovery must also be 
 /local_goal_point                  geometry_msgs/PointStamped
 /target/status                     std_msgs/String JSON
 /target/debug_image/compressed     sensor_msgs/CompressedImage, JPEG compressed
+/target/debug_image                sensor_msgs/Image, resized raw fallback for RViz without compressed plugin
 /utlidar/transformed_cloud         sensor_msgs/PointCloud2
 /utlidar/accumulated_cloud         sensor_msgs/PointCloud2
 /local_obstacle_grid               nav_msgs/OccupancyGrid
@@ -251,4 +254,71 @@ The two devices should use the same `ROS_DOMAIN_ID`. DDS discovery must also be 
 /goal_waypoint                     geometry_msgs/PointStamped
 /cmd_vel                           geometry_msgs/TwistStamped
 /api/sport/request                 unitree_api/Request
+```
+
+
+## v4 note
+
+`oak_yolo_target.launch.py` now forces the YOLO `device` launch argument to ROS string type. This prevents ROS 2 Humble from coercing `device:=0` into an integer and crashing the node with `InvalidParameterTypeException`.
+
+## v5 note
+
+RViz2 can display `/target/debug_image/compressed` only if the monitoring computer has the compressed image transport subscriber plugin installed. On ROS 2 Humble, install it on the computer running RViz2:
+
+```bash
+sudo apt update
+sudo apt install -y ros-humble-compressed-image-transport
+source /opt/ros/humble/setup.bash
+```
+
+This version also publishes `/target/debug_image` as a resized raw `sensor_msgs/Image` fallback. In RViz2, use the raw topic if the compressed transport plugin is not installed. The raw fallback can be disabled with:
+
+```bash
+ros2 launch oak_yolo_target oak_yolo_target.launch.py publish_debug_raw_image:=false
+```
+
+
+## v6 note: YOLO CUDA fallback
+
+`oak_yolo_target.launch.py` now defaults to `device:=auto`. If the active PyTorch install reports `torch.cuda.is_available() == False`, the node uses `device=cpu` instead of failing every frame with `Invalid CUDA device=0`. To force CPU explicitly:
+
+```bash
+ros2 launch oak_yolo_target oak_yolo_target.launch.py device:=cpu
+```
+
+For Jetson GPU acceleration, fix the Jetson PyTorch/CUDA environment or export a YOLO11 TensorRT engine and pass it as `model_path`.
+
+### Floor / ground filtering for 3D LiDAR
+
+The local planner treats only points in this vertical band as obstacles:
+
+```bash
+obstacle_z_min_m:=0.05
+obstacle_z_max_m:=1.20
+```
+
+This keeps floor returns from the 3D LiDAR out of the 2D potential field.
+If the floor still appears in `/local_obstacles` or `/local_obstacle_grid`, raise
+`obstacle_z_min_m` to `0.08` or `0.10`. If low obstacles must be detected, lower it
+carefully while checking the debug grids.
+
+
+
+## v8 notes
+
+- Fixed a Python f-string syntax error in `potential_astar_planner_node.py`.
+- `go2_path_follower_node.py` now starts even if `unitree_api` is not importable. In that case it still publishes `/cmd_vel` for debugging, but it cannot publish `/api/sport/request`.
+- For planner-only debugging without Unitree ROS2 API messages, run:
+
+```bash
+ros2 launch go2_lidar_planner go2_lidar_planner.launch.py api_control_enabled:=false
+```
+
+- For real Go2 sport API control, source/build the Unitree ROS2 interface workspace so that this works:
+
+```bash
+python3 - <<'PY'
+from unitree_api.msg import Request
+print('unitree_api OK')
+PY
 ```

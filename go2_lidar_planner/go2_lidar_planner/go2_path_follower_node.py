@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Path follower that triggers Unitree Go2 sport API only while a target is active."""
+"""Path follower for Go2 sport API.
+
+This node intentionally keeps the Unitree sport Request message format compatible
+with the original CWNU package.  Autonomy is enabled by a fresh target point and
+fresh path.  /target/status can be used as an additional gate, but it is disabled
+by default because the original working package did not require it and multi-PC
+ROS networks often miss auxiliary debug/status topics during early integration.
+"""
 
 from __future__ import annotations
 
@@ -31,23 +38,29 @@ class Go2PathFollowerNode(Node):
         self.declare_parameter("target_status_topic", "/target/status")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("sport_request_topic", "/api/sport/request")
+        self.declare_parameter("follower_status_topic", "/go2_follower/status")
         self.declare_parameter("cmd_frame", "base_link")
         self.declare_parameter("publish_rate_hz", 30.0)
 
         self.declare_parameter("api_control_enabled", True)
+        # Keep this false by default.  The target PointStamped itself is the
+        # control trigger.  Requiring /target/status made the robot refuse to
+        # move even when /local_goal_point and /path were valid.
+        self.declare_parameter("require_target_status", False)
         self.declare_parameter("manual_release_when_no_target", True)
         self.declare_parameter("send_stop_on_release", True)
-        self.declare_parameter("target_stale_timeout_s", 0.6)
-        self.declare_parameter("path_stale_timeout_s", 0.6)
+        self.declare_parameter("target_stale_timeout_s", 0.8)
+        self.declare_parameter("status_stale_timeout_s", 1.0)
+        self.declare_parameter("path_stale_timeout_s", 0.8)
         self.declare_parameter("follow_distance_m", 2.0)
         self.declare_parameter("goal_tolerance_m", 0.18)
         self.declare_parameter("lookahead_distance_m", 0.45)
 
-        self.declare_parameter("max_forward_speed_mps", 0.60)
-        self.declare_parameter("max_lateral_speed_mps", 0.35)
-        self.declare_parameter("speed_gain", 0.75)
+        self.declare_parameter("max_forward_speed_mps", 0.45)
+        self.declare_parameter("max_lateral_speed_mps", 0.30)
+        self.declare_parameter("speed_gain", 0.55)
         self.declare_parameter("slowdown_yaw_error_rad", 0.65)
-        self.declare_parameter("yaw_gain", 1.6)
+        self.declare_parameter("yaw_gain", 1.8)
         self.declare_parameter("max_yaw_rate_rps", 1.0)
         self.declare_parameter("yaw_deadband_rad", 0.03)
 
@@ -59,11 +72,14 @@ class Go2PathFollowerNode(Node):
         self.status_time: Optional[Time] = None
         self.autonomy_active: bool = False
         self.seq = 0
+        self._last_inactive_reason = "initializing"
+        self._last_diag_time = self.get_clock().now() - Duration(seconds=10.0)
 
         self.create_subscription(Path, str(self.get_parameter("path_topic").value), self._path_cb, 5)
         self.create_subscription(PointStamped, str(self.get_parameter("target_topic").value), self._target_cb, 5)
         self.create_subscription(String, str(self.get_parameter("target_status_topic").value), self._status_cb, 10)
         self.cmd_pub = self.create_publisher(TwistStamped, str(self.get_parameter("cmd_vel_topic").value), 10)
+        self.status_pub = self.create_publisher(String, str(self.get_parameter("follower_status_topic").value), 10)
         self.req_pub = None
         if HAS_UNITREE_API:
             self.req_pub = self.create_publisher(Request, str(self.get_parameter("sport_request_topic").value), 10)
@@ -76,7 +92,11 @@ class Go2PathFollowerNode(Node):
 
         rate = max(1.0, float(self.get_parameter("publish_rate_hz").value))
         self.create_timer(1.0 / rate, self._timer_cb)
-        self.get_logger().info("Go2 path follower ready. API commands are gated by active target status.")
+        self.get_logger().info(
+            "Go2 path follower ready. Control is gated by fresh /local_goal_point and /path; "
+            f"require_target_status={bool(self.get_parameter('require_target_status').value)}, "
+            f"unitree_api_available={HAS_UNITREE_API}."
+        )
 
     # ---------------------------------------------------------------- callbacks
     def _path_cb(self, msg: Path) -> None:
@@ -98,13 +118,16 @@ class Go2PathFollowerNode(Node):
     # ---------------------------------------------------------------- timer
     def _timer_cb(self) -> None:
         now = self.get_clock().now()
-        active = self._target_is_active(now)
+        active, reason = self._target_is_active(now)
+        self._last_inactive_reason = reason
         if not active:
             if self.autonomy_active:
-                self.get_logger().warn("Autonomy released: target/path inactive. Manual control is no longer overwritten.")
+                self.get_logger().warn(f"Autonomy released: {reason}. Manual control is no longer overwritten.")
                 if bool(self.get_parameter("send_stop_on_release").value):
                     self._publish_zero(stop_api_once=True)
             self.autonomy_active = False
+            self._publish_follower_status(now, False, reason, None)
+            self._diagnose_inactive(now, reason)
             return
 
         self.autonomy_active = True
@@ -112,21 +135,33 @@ class Go2PathFollowerNode(Node):
         self.cmd_pub.publish(cmd)
         if bool(self.get_parameter("api_control_enabled").value) and HAS_UNITREE_API and self.req_pub is not None:
             self._publish_sport_request(cmd)
+        self._publish_follower_status(now, True, "active", cmd)
 
-    def _target_is_active(self, now: Time) -> bool:
-        if not self.status_tracked:
-            return False
+    def _target_is_active(self, now: Time) -> Tuple[bool, str]:
         target_timeout = Duration(seconds=float(self.get_parameter("target_stale_timeout_s").value))
         path_timeout = Duration(seconds=float(self.get_parameter("path_stale_timeout_s").value))
-        if self.status_time is None or now - self.status_time > target_timeout:
-            return False
-        if self.target_time is None or now - self.target_time > target_timeout:
-            return False
-        if self.path_time is None or now - self.path_time > path_timeout:
-            return False
-        if self.path is None or len(self.path.poses) == 0:
-            return False
-        return True
+        status_timeout = Duration(seconds=float(self.get_parameter("status_stale_timeout_s").value))
+
+        if self.target_time is None or self.target_xy is None:
+            return False, "no target point received"
+        if now - self.target_time > target_timeout:
+            return False, "target point stale"
+        if self.path_time is None or self.path is None:
+            return False, "no path received"
+        if now - self.path_time > path_timeout:
+            return False, "path stale"
+        if len(self.path.poses) == 0:
+            return False, "empty path"
+
+        if bool(self.get_parameter("require_target_status").value):
+            if self.status_time is None:
+                return False, "target status missing"
+            if now - self.status_time > status_timeout:
+                return False, "target status stale"
+            if not self.status_tracked:
+                return False, "target status tracked=false"
+
+        return True, "active"
 
     def _compute_cmd(self, now: Time) -> TwistStamped:
         cmd = TwistStamped()
@@ -151,6 +186,7 @@ class Go2PathFollowerNode(Node):
             )
         cmd.twist.angular.z = yaw_rate
 
+        # If already within the desired person-following distance, only yaw-align.
         if target_distance <= follow_distance + float(self.get_parameter("goal_tolerance_m").value):
             return cmd
 
@@ -160,7 +196,10 @@ class Go2PathFollowerNode(Node):
         if path_distance <= float(self.get_parameter("goal_tolerance_m").value):
             return cmd
 
-        speed = min(float(self.get_parameter("max_forward_speed_mps").value), float(self.get_parameter("speed_gain").value) * path_distance)
+        speed = min(
+            float(self.get_parameter("max_forward_speed_mps").value),
+            float(self.get_parameter("speed_gain").value) * path_distance,
+        )
         slowdown_error = max(1e-3, float(self.get_parameter("slowdown_yaw_error_rad").value))
         yaw_slowdown = max(0.15, 1.0 - min(1.0, abs(heading_error) / slowdown_error) * 0.65)
         speed *= yaw_slowdown
@@ -213,6 +252,7 @@ class Go2PathFollowerNode(Node):
             req.parameter = ""
         else:
             req.header.identity.api_id = 1008  # ROBOT_SPORT_API_ID_MOVE
+            # Same parameter schema as the original working package.
             req.parameter = json.dumps(
                 {
                     "x": float(cmd.twist.linear.x),
@@ -221,6 +261,35 @@ class Go2PathFollowerNode(Node):
                 }
             )
         self.req_pub.publish(req)
+
+    def _publish_follower_status(self, now: Time, active: bool, reason: str, cmd: Optional[TwistStamped]) -> None:
+        payload = {
+            "active": bool(active),
+            "reason": reason,
+            "unitree_api_available": HAS_UNITREE_API,
+            "api_control_enabled": bool(self.get_parameter("api_control_enabled").value),
+            "request_publisher_ready": self.req_pub is not None,
+            "target_xy": None if self.target_xy is None else {"x": self.target_xy[0], "y": self.target_xy[1]},
+            "path_len": 0 if self.path is None else len(self.path.poses),
+        }
+        if cmd is not None:
+            payload["cmd"] = {
+                "vx": float(cmd.twist.linear.x),
+                "vy": float(cmd.twist.linear.y),
+                "yaw_rate": float(cmd.twist.angular.z),
+            }
+        self.status_pub.publish(String(data=json.dumps(payload)))
+
+    def _diagnose_inactive(self, now: Time, reason: str) -> None:
+        if now - self._last_diag_time < Duration(seconds=2.0):
+            return
+        self._last_diag_time = now
+        self.get_logger().warn(
+            f"Follower inactive: {reason}. target_received={self.target_time is not None}, "
+            f"path_received={self.path_time is not None}, status_tracked={self.status_tracked}, "
+            f"require_target_status={bool(self.get_parameter('require_target_status').value)}, "
+            f"unitree_api_available={HAS_UNITREE_API}"
+        )
 
     @staticmethod
     def _clip(value: float, lo: float, hi: float) -> float:

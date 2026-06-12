@@ -322,3 +322,8 @@ from unitree_api.msg import Request
 print('unitree_api OK')
 PY
 ```
+
+
+## v12 integration note
+
+The Go2-side launch uses `target_stale_timeout_s:=2.0` and `path_stale_timeout_s:=1.5` by default because the OAK/YOLO node can run on a separate device and may publish `/local_goal_point` slower than the local LiDAR/control loop, especially when YOLO falls back to CPU. The planner and follower now use the same target timeout. Check `/go2_follower/status` for `target_age_s`, `path_age_s`, `target_timeout_s`, and `unitree_api_available`. If `unitree_api_available` is false, source the Unitree ROS2 interface workspace before launching this package; otherwise `/api/sport/request` cannot be published.

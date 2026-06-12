@@ -271,6 +271,10 @@ class Go2PathFollowerNode(Node):
             "request_publisher_ready": self.req_pub is not None,
             "target_xy": None if self.target_xy is None else {"x": self.target_xy[0], "y": self.target_xy[1]},
             "path_len": 0 if self.path is None else len(self.path.poses),
+            "target_age_s": self._age_s(now, self.target_time),
+            "path_age_s": self._age_s(now, self.path_time),
+            "target_timeout_s": float(self.get_parameter("target_stale_timeout_s").value),
+            "path_timeout_s": float(self.get_parameter("path_stale_timeout_s").value),
         }
         if cmd is not None:
             payload["cmd"] = {
@@ -280,13 +284,24 @@ class Go2PathFollowerNode(Node):
             }
         self.status_pub.publish(String(data=json.dumps(payload)))
 
+    def _age_s(self, now: Time, t: Optional[Time]) -> Optional[float]:
+        if t is None:
+            return None
+        return float((now - t).nanoseconds) * 1e-9
+
     def _diagnose_inactive(self, now: Time, reason: str) -> None:
         if now - self._last_diag_time < Duration(seconds=2.0):
             return
         self._last_diag_time = now
+        target_age = self._age_s(now, self.target_time)
+        path_age = self._age_s(now, self.path_time)
+        status_age = self._age_s(now, self.status_time)
         self.get_logger().warn(
             f"Follower inactive: {reason}. target_received={self.target_time is not None}, "
-            f"path_received={self.path_time is not None}, status_tracked={self.status_tracked}, "
+            f"target_age_s={target_age}, target_timeout_s={float(self.get_parameter('target_stale_timeout_s').value):.2f}, "
+            f"path_received={self.path_time is not None}, path_age_s={path_age}, "
+            f"path_timeout_s={float(self.get_parameter('path_stale_timeout_s').value):.2f}, "
+            f"status_tracked={self.status_tracked}, status_age_s={status_age}, "
             f"require_target_status={bool(self.get_parameter('require_target_status').value)}, "
             f"unitree_api_available={HAS_UNITREE_API}"
         )

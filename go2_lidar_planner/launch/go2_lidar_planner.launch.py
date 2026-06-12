@@ -48,8 +48,8 @@ def generate_launch_description():
         DeclareLaunchArgument('max_forward_speed_mps', default_value='1.0'),
         DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.5'),
         DeclareLaunchArgument('max_yaw_rate_rps', default_value='1.0'),
-        DeclareLaunchArgument('target_stale_timeout_s', default_value='0.6'),
-        DeclareLaunchArgument('path_stale_timeout_s', default_value='0.6'),
+        DeclareLaunchArgument('target_stale_timeout_s', default_value='2.0'),
+        DeclareLaunchArgument('path_stale_timeout_s', default_value='1.5'),
     ]
 
     lidar_transformer = Node(
@@ -101,6 +101,9 @@ def generate_launch_description():
             'waypoint_potential_threshold': ParameterValue(LaunchConfiguration('waypoint_potential_threshold'), value_type=float),
             'obstacle_z_min_m': ParameterValue(LaunchConfiguration('obstacle_z_min_m'), value_type=float),
             'obstacle_z_max_m': ParameterValue(LaunchConfiguration('obstacle_z_max_m'), value_type=float),
+            # OAK/YOLO may run on another device and can be slower than LiDAR/control.
+            # Use the same target timeout in planner and follower.
+            'target_stale_timeout_s': ParameterValue(LaunchConfiguration('target_stale_timeout_s'), value_type=float),
         }],
     )
 

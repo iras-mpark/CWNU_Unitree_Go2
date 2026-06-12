@@ -33,7 +33,7 @@ def generate_launch_description():
         DeclareLaunchArgument('accumulator_publish_rate_hz', default_value='15.0'),
 
         # Planner / follower.
-        DeclareLaunchArgument('follow_distance_m', default_value='2.0'),
+        DeclareLaunchArgument('follow_distance_m', default_value='1.0'),
         DeclareLaunchArgument('grid_resolution_m', default_value='0.12'),
         DeclareLaunchArgument('safety_radius_m', default_value='0.35'),
         DeclareLaunchArgument('potential_radius_m', default_value='0.95'),
@@ -48,7 +48,7 @@ def generate_launch_description():
         DeclareLaunchArgument('max_forward_speed_mps', default_value='1.0'),
         DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.5'),
         DeclareLaunchArgument('max_yaw_rate_rps', default_value='1.0'),
-        DeclareLaunchArgument('target_stale_timeout_s', default_value='2.0'),
+        DeclareLaunchArgument('target_stale_timeout_s', default_value='1.0'),
         DeclareLaunchArgument('path_stale_timeout_s', default_value='1.5'),
     ]
 

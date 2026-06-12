@@ -9,6 +9,7 @@ into a PointStamped in the robot base frame.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -63,6 +64,7 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("target_status_topic", "/target/status")
         self.declare_parameter("debug_image_topic", "/target/debug_image/compressed")
         self.declare_parameter("debug_raw_image_topic", "/target/debug_image")
+        self.declare_parameter("target_camera_info_topic", "/target/camera_info")
         self.declare_parameter("target_frame", "base_link")
 
         # Model / inference parameters.  For Jetson, pass a TensorRT .engine path
@@ -104,6 +106,7 @@ class OakYoloTargetNode(Node):
         # Debug image publication.
         self.declare_parameter("publish_debug_image", True)
         self.declare_parameter("publish_debug_raw_image", True)
+        self.declare_parameter("publish_target_camera_info", True)
         self.declare_parameter("debug_image_rate_hz", 5.0)
         self.declare_parameter("debug_jpeg_quality", 35)
         self.declare_parameter("debug_resize_width", 640)
@@ -115,6 +118,7 @@ class OakYoloTargetNode(Node):
         self.target_status_topic = self.get_parameter("target_status_topic").value
         self.debug_image_topic = self.get_parameter("debug_image_topic").value
         self.debug_raw_image_topic = self.get_parameter("debug_raw_image_topic").value
+        self.target_camera_info_topic = self.get_parameter("target_camera_info_topic").value
         self.target_frame = self.get_parameter("target_frame").value
 
         self.bridge = CvBridge()
@@ -142,10 +146,12 @@ class OakYoloTargetNode(Node):
         self.status_pub = self.create_publisher(String, self.target_status_topic, 10)
         self.debug_pub = self.create_publisher(CompressedImage, self.debug_image_topic, 3)
         self.debug_raw_pub = self.create_publisher(Image, self.debug_raw_image_topic, 3)
+        self.target_camera_info_pub = self.create_publisher(CameraInfo, self.target_camera_info_topic, 3)
 
         self.get_logger().info(
             f"OAK YOLO target node ready: rgb={self.rgb_topic}, depth={self.depth_topic}, "
-            f"camera_info={self.camera_info_topic}, point={self.target_point_topic}"
+            f"camera_info={self.camera_info_topic}, point={self.target_point_topic}, "
+            f"target_camera_info={self.target_camera_info_topic}"
         )
 
     # ------------------------------------------------------------------ setup
@@ -233,6 +239,22 @@ class OakYoloTargetNode(Node):
 
     def _camera_info_callback(self, msg: CameraInfo) -> None:
         self.latest_camera_info = msg
+
+        # Keep /target/camera_info alive even when no debug image is currently being
+        # published.  RViz Image display does not need CameraInfo, but Camera display
+        # and some monitoring tools expect this topic to exist.  The debug image
+        # publisher below republishes a resized/scaled version with the debug image
+        # timestamp whenever a debug frame is emitted.
+        if bool(self.get_parameter("publish_target_camera_info").value):
+            info = self._make_target_camera_info(
+                source=msg,
+                stamp=msg.header.stamp,
+                out_width=int(msg.width),
+                out_height=int(msg.height),
+                scale_x=1.0,
+                scale_y=1.0,
+            )
+            self.target_camera_info_pub.publish(info)
 
     def _rgb_callback(self, msg: Image) -> None:
         if self.latest_depth is None or self.latest_camera_info is None:
@@ -601,6 +623,49 @@ class OakYoloTargetNode(Node):
             )
         self.status_pub.publish(String(data=json.dumps(payload)))
 
+    def _make_target_camera_info(
+        self,
+        source: CameraInfo,
+        stamp: Any,
+        out_width: int,
+        out_height: int,
+        scale_x: float,
+        scale_y: float,
+    ) -> CameraInfo:
+        """Return CameraInfo for the debug/target image topic.
+
+        The source intrinsics come from the OAK camera_info topic used for depth
+        projection.  When the debug image is resized before publication, the focal
+        lengths and principal point must be scaled by the same factors so that RViz
+        or image_transport tools that consume /target/camera_info see a consistent
+        image size.
+        """
+        info = copy.deepcopy(source)
+        info.header.stamp = stamp
+        info.header.frame_id = self.target_frame
+        info.width = int(out_width)
+        info.height = int(out_height)
+
+        k = list(info.k)
+        if len(k) == 9:
+            k[0] *= scale_x
+            k[2] *= scale_x
+            k[4] *= scale_y
+            k[5] *= scale_y
+            info.k = k
+
+        p = list(info.p)
+        if len(p) == 12:
+            p[0] *= scale_x
+            p[2] *= scale_x
+            p[3] *= scale_x
+            p[5] *= scale_y
+            p[6] *= scale_y
+            p[7] *= scale_y
+            info.p = p
+
+        return info
+
     def _publish_debug_image(
         self,
         frame: np.ndarray,
@@ -670,16 +735,32 @@ class OakYoloTargetNode(Node):
                     cv2.LINE_AA,
                 )
 
+        src_h, src_w = int(vis.shape[0]), int(vis.shape[1])
         resize_w = int(self.get_parameter("debug_resize_width").value)
         if resize_w > 0 and vis.shape[1] > resize_w:
             scale = resize_w / float(vis.shape[1])
             vis = cv2.resize(vis, (resize_w, int(round(vis.shape[0] * scale))))
+
+        out_h, out_w = int(vis.shape[0]), int(vis.shape[1])
+        scale_x = float(out_w) / max(1.0, float(src_w))
+        scale_y = float(out_h) / max(1.0, float(src_h))
 
         if bool(self.get_parameter("publish_debug_raw_image").value):
             raw_msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
             raw_msg.header.stamp = stamp
             raw_msg.header.frame_id = self.target_frame
             self.debug_raw_pub.publish(raw_msg)
+
+        if bool(self.get_parameter("publish_target_camera_info").value) and self.latest_camera_info is not None:
+            info_msg = self._make_target_camera_info(
+                source=self.latest_camera_info,
+                stamp=stamp,
+                out_width=out_w,
+                out_height=out_h,
+                scale_x=scale_x,
+                scale_y=scale_y,
+            )
+            self.target_camera_info_pub.publish(info_msg)
 
         quality = int(self.get_parameter("debug_jpeg_quality").value)
         quality = int(np.clip(quality, 5, 95))

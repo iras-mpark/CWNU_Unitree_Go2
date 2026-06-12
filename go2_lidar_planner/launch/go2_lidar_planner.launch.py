@@ -34,19 +34,19 @@ def generate_launch_description():
 
         # Planner / follower.
         DeclareLaunchArgument('follow_distance_m', default_value='2.0'),
-        DeclareLaunchArgument('grid_resolution_m', default_value='0.1'),
+        DeclareLaunchArgument('grid_resolution_m', default_value='0.12'),
         DeclareLaunchArgument('safety_radius_m', default_value='0.35'),
         DeclareLaunchArgument('potential_radius_m', default_value='0.95'),
         DeclareLaunchArgument('potential_weight', default_value='4.0'),
         DeclareLaunchArgument('waypoint_potential_threshold', default_value='0.35'),
         # Only points inside this height band are treated as obstacles.
         # The lower bound intentionally removes floor/ground returns from the 3D LiDAR.
-        DeclareLaunchArgument('obstacle_z_min_m', default_value='0.05'),
+        DeclareLaunchArgument('obstacle_z_min_m', default_value='0.1'),
         DeclareLaunchArgument('obstacle_z_max_m', default_value='1.20'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),
-        DeclareLaunchArgument('max_forward_speed_mps', default_value='0.45'),
-        DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.35'),
+        DeclareLaunchArgument('max_forward_speed_mps', default_value='1.0'),
+        DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.5'),
         DeclareLaunchArgument('max_yaw_rate_rps', default_value='1.0'),
         DeclareLaunchArgument('target_stale_timeout_s', default_value='0.6'),
         DeclareLaunchArgument('path_stale_timeout_s', default_value='0.6'),

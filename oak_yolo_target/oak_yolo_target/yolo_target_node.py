@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""OAK RGB-D + Ultralytics YOLO tracker to robot-frame 3D person target.
+"""OAK RGB-D + Ultralytics YOLO person detector to robot-frame 3D target.
 
 This node intentionally uses only standard ROS 2 message types.  It receives an
 RGB image, an aligned depth image, and depth camera intrinsics.  Ultralytics YOLO
-track mode is used to detect and track people; the selected target is converted
-into a PointStamped in the robot base frame.
+detects people; the nearest valid person is converted into a PointStamped in the
+robot base frame.  Tracking IDs are intentionally not used for target selection.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class PersonCandidate:
 
 
 class OakYoloTargetNode(Node):
-    """Detect/track a person and publish a stable 3D local goal."""
+    """Detect people and publish the nearest valid 3D local goal."""
 
     def __init__(self) -> None:
         super().__init__("oak_yolo_target_node")
@@ -72,6 +72,7 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("model_path", "yolo11n.pt")
         self.declare_parameter("fallback_model_path", "")
         self.declare_parameter("tracker", "bytetrack.yaml")
+        self.declare_parameter("use_yolo_tracking", False)
         self.declare_parameter("device", "auto")
         self.declare_parameter("imgsz", 640)
         self.declare_parameter("conf_threshold", 0.35)
@@ -80,13 +81,17 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("half", True)
         self.declare_parameter("show_yolo_logs", False)
 
-        # Target acquisition policy.
+        # Target selection policy.
+        # Tracking IDs are deliberately ignored by default because unstable IDs can
+        # cause the robot to lose the person.  Each frame selects the nearest valid
+        # person in front of the robot.
         self.declare_parameter("auto_acquire", True)
-        self.declare_parameter("acquire_stable_frames", 8)
+        self.declare_parameter("acquire_stable_frames", 1)
         self.declare_parameter("acquire_max_distance_m", 6.0)
-        self.declare_parameter("acquire_center_gate_norm", 0.80)
+        self.declare_parameter("acquire_center_gate_norm", 1.00)
         self.declare_parameter("lost_timeout_s", 1.0)
         self.declare_parameter("reacquire_distance_gate_m", 1.0)
+        self.declare_parameter("nearest_person_use_center_gate", False)
 
         # Depth handling.
         self.declare_parameter("depth_min_m", 0.25)
@@ -130,6 +135,9 @@ class OakYoloTargetNode(Node):
         self.latest_depth_encoding: str = ""
         self.latest_camera_info: Optional[CameraInfo] = None
 
+        # Kept only for status/debug backward compatibility.  Target selection no
+        # longer locks on YOLO track_id; it chooses the nearest valid person every
+        # frame.
         self.locked_track_id: Optional[int] = None
         self.locked_last_point: Optional[Tuple[float, float, float]] = None
         self.locked_last_seen_time: Optional[float] = None
@@ -151,7 +159,8 @@ class OakYoloTargetNode(Node):
         self.get_logger().info(
             f"OAK YOLO target node ready: rgb={self.rgb_topic}, depth={self.depth_topic}, "
             f"camera_info={self.camera_info_topic}, point={self.target_point_topic}, "
-            f"target_camera_info={self.target_camera_info_topic}"
+            f"target_camera_info={self.target_camera_info_topic}, "
+            f"selection=nearest_person_no_track_id"
         )
 
     # ------------------------------------------------------------------ setup
@@ -275,7 +284,7 @@ class OakYoloTargetNode(Node):
             self._publish_target(target, msg.header.stamp)
             self._publish_status(True, target=target)
         else:
-            self._publish_status(False, reason="no_locked_person")
+            self._publish_status(False, reason="no_valid_nearest_person")
 
         if bool(self.get_parameter("publish_debug_image").value):
             self._publish_debug_image(frame, candidates, target, msg.header.stamp)
@@ -365,41 +374,58 @@ class OakYoloTargetNode(Node):
         tracker: str,
         verbose: bool,
     ) -> Optional[Any]:
+        """Run YOLO detection, optionally using track mode, with CPU fallback.
+
+        Target selection does not use tracking IDs.  By default this calls
+        YOLO.predict() instead of YOLO.track() so ID switching cannot affect the
+        selected person.  The use_yolo_tracking parameter is left available only
+        for optional visualization/debug experiments.
+        """
+        use_tracking = bool(self.get_parameter("use_yolo_tracking").value)
         kwargs = dict(
             source=frame,
-            persist=True,
             classes=[person_class_id],
             conf=conf,
             iou=iou,
             imgsz=imgsz,
             device=device,
-            tracker=tracker,
             verbose=verbose,
         )
+        if use_tracking:
+            kwargs["persist"] = True
+            kwargs["tracker"] = tracker
         if half:
             kwargs["half"] = True
 
         try:
             self._last_yolo_error = ""
-            return self.model.track(**kwargs)
+            return self._run_yolo_backend(kwargs, use_tracking)
         except TypeError:
-            # Some exported backends do not accept every keyword. Retry without half.
+            # Some exported/TensorRT backends do not accept every keyword. Retry without half.
             kwargs.pop("half", None)
             try:
                 self._last_yolo_error = ""
-                return self.model.track(**kwargs)
+                return self._run_yolo_backend(kwargs, use_tracking)
             except Exception as exc:
-                return self._handle_track_exception_and_retry(frame, kwargs, exc)
+                return self._handle_yolo_exception_and_retry(kwargs, exc, use_tracking)
         except Exception as exc:
-            return self._handle_track_exception_and_retry(frame, kwargs, exc)
+            return self._handle_yolo_exception_and_retry(kwargs, exc, use_tracking)
 
-    def _handle_track_exception_and_retry(self, frame: np.ndarray, kwargs: Dict[str, Any], exc: Exception) -> Optional[Any]:
+    def _run_yolo_backend(self, kwargs: Dict[str, Any], use_tracking: bool) -> Optional[Any]:
+        if use_tracking:
+            return self.model.track(**kwargs)
+        return self.model.predict(**kwargs)
+
+    def _handle_yolo_exception_and_retry(
+        self, kwargs: Dict[str, Any], exc: Exception, use_tracking: bool
+    ) -> Optional[Any]:
         text = str(exc)
         self._last_yolo_error = text
         cuda_error = "Invalid CUDA" in text or "CUDA" in text or "cuda" in text
+        mode = "tracking" if use_tracking else "detection"
         if kwargs.get("device") != "cpu" and cuda_error:
             self._warn_throttled(
-                f"YOLO tracking failed on device={kwargs.get('device')}: {text}. Retrying on CPU."
+                f"YOLO {mode} failed on device={kwargs.get('device')}: {text}. Retrying on CPU."
             )
             self.inference_device = "cpu"
             self.inference_half = False
@@ -407,13 +433,13 @@ class OakYoloTargetNode(Node):
             kwargs.pop("half", None)
             try:
                 self._last_yolo_error = ""
-                return self.model.track(**kwargs)
+                return self._run_yolo_backend(kwargs, use_tracking)
             except Exception as cpu_exc:
                 self._last_yolo_error = str(cpu_exc)
                 self._warn_throttled(f"YOLO CPU fallback also failed: {cpu_exc}")
                 return None
 
-        self._warn_throttled(f"YOLO tracking failed: {exc}")
+        self._warn_throttled(f"YOLO {mode} failed: {exc}")
         return None
 
     def _estimate_depth_and_point(
@@ -503,77 +529,59 @@ class OakYoloTargetNode(Node):
     def _select_target(
         self, candidates: List[PersonCandidate], image_width: int
     ) -> Optional[PersonCandidate]:
+        """Select the nearest valid person every frame.
+
+        YOLO tracking IDs are intentionally ignored.  This prevents unstable ID
+        switches from clearing the target lock or causing the robot to stop.
+        """
         now = time.monotonic()
+        self.locked_track_id = None
+
         if not candidates:
-            if self.locked_last_seen_time is not None and now - self.locked_last_seen_time > float(
-                self.get_parameter("lost_timeout_s").value
-            ):
-                self._clear_lock()
-            return None
-
-        # Prefer the currently locked track ID if the tracker still provides it.
-        if self.locked_track_id is not None:
-            for cand in candidates:
-                if cand.track_id == self.locked_track_id:
-                    self._update_lock(cand, now)
-                    return cand
-
-            # Short-term fallback: choose the candidate closest to the previous 3D point.
-            if self.locked_last_point is not None and self.locked_last_seen_time is not None:
-                if now - self.locked_last_seen_time <= float(self.get_parameter("lost_timeout_s").value):
-                    gate = float(self.get_parameter("reacquire_distance_gate_m").value)
-                    nearest = min(
-                        candidates,
-                        key=lambda c: math.hypot(
-                            c.point_xyz[0] - self.locked_last_point[0],
-                            c.point_xyz[1] - self.locked_last_point[1],
-                        ),
-                    )
-                    d = math.hypot(
-                        nearest.point_xyz[0] - self.locked_last_point[0],
-                        nearest.point_xyz[1] - self.locked_last_point[1],
-                    )
-                    if d <= gate:
-                        self._update_lock(nearest, now)
-                        return nearest
-            self._clear_lock()
+            self.locked_last_point = None
+            self.locked_last_seen_time = None
+            self._candidate_key = None
+            self._candidate_count = 0
             return None
 
         if not bool(self.get_parameter("auto_acquire").value):
             return None
 
-        # Startup policy for monitorless operation: lock the nearest stable person
-        # in front of the robot, preferably near the image center.
         max_dist = float(self.get_parameter("acquire_max_distance_m").value)
         center_gate = float(self.get_parameter("acquire_center_gate_norm").value)
-        filtered = []
+        use_center_gate = bool(self.get_parameter("nearest_person_use_center_gate").value)
+
+        valid: List[PersonCandidate] = []
         for cand in candidates:
-            x_norm = 2.0 * (cand.center_uv_rgb[0] / max(1.0, float(image_width)) - 0.5)
-            if abs(x_norm) <= center_gate and cand.depth_m <= max_dist and cand.point_xyz[0] > 0.0:
-                filtered.append(cand)
-        if not filtered:
+            if cand.point_xyz[0] <= 0.0:
+                continue
+            if cand.depth_m > max_dist:
+                continue
+            if use_center_gate:
+                x_norm = 2.0 * (cand.center_uv_rgb[0] / max(1.0, float(image_width)) - 0.5)
+                if abs(x_norm) > center_gate:
+                    continue
+            valid.append(cand)
+
+        if not valid:
+            self.locked_last_point = None
+            self.locked_last_seen_time = None
             self._candidate_key = None
             self._candidate_count = 0
             return None
 
-        chosen = min(filtered, key=lambda c: (c.depth_m, -c.confidence))
-        key = str(chosen.track_id) if chosen.track_id is not None else "nearest_person"
-        if key == self._candidate_key:
-            self._candidate_count += 1
-        else:
-            self._candidate_key = key
-            self._candidate_count = 1
-
-        if self._candidate_count >= int(self.get_parameter("acquire_stable_frames").value):
-            self._update_lock(chosen, now)
-            self.get_logger().info(
-                f"Locked target person: track_id={chosen.track_id}, depth={chosen.depth_m:.2f}m"
-            )
-            return chosen
-        return None
+        # Closest in metric 3D forward distance is the most direct criterion for
+        # following.  Confidence is only a tie-breaker.
+        chosen = min(valid, key=lambda c: (c.depth_m, -c.confidence))
+        self.locked_last_point = chosen.point_xyz
+        self.locked_last_seen_time = now
+        self._candidate_key = "nearest_person"
+        self._candidate_count = len(valid)
+        return chosen
 
     def _update_lock(self, cand: PersonCandidate, now: float) -> None:
-        self.locked_track_id = cand.track_id
+        # Backward-compatible helper; track_id is intentionally ignored.
+        self.locked_track_id = None
         self.locked_last_point = cand.point_xyz
         self.locked_last_seen_time = now
 
@@ -601,7 +609,8 @@ class OakYoloTargetNode(Node):
     ) -> None:
         payload: Dict[str, Any] = {
             "tracked": bool(tracked),
-            "locked_track_id": self.locked_track_id,
+            "locked_track_id": None,
+            "selection_policy": "nearest_person_no_track_id",
             "reason": reason,
             "inference_device": self.inference_device,
             "yolo_error": self._last_yolo_error,
@@ -612,7 +621,7 @@ class OakYoloTargetNode(Node):
             x1, y1, x2, y2 = target.bbox_xyxy
             payload.update(
                 {
-                    "track_id": target.track_id,
+                    "track_id": None,
                     "class_name": target.class_name,
                     "confidence": target.confidence,
                     "depth_m": target.depth_m,
@@ -687,8 +696,6 @@ class OakYoloTargetNode(Node):
             color = (0, 255, 0) if is_target else (0, 180, 255)
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, thickness)
             label = f"{cand.class_name} {cand.confidence:.2f}"
-            if cand.track_id is not None:
-                label += f" id={cand.track_id}"
             label += f" {cand.depth_m:.2f}m"
             cv2.putText(
                 vis,
@@ -704,7 +711,7 @@ class OakYoloTargetNode(Node):
         if target is None:
             cv2.putText(
                 vis,
-                "NO LOCKED TARGET",
+                "NO VALID PERSON TARGET",
                 (20, 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.85,
@@ -712,7 +719,7 @@ class OakYoloTargetNode(Node):
                 2,
                 cv2.LINE_AA,
             )
-            detail = f"candidates={len(candidates)} stable={self._candidate_count}/{int(self.get_parameter('acquire_stable_frames').value)} device={self.inference_device}"
+            detail = f"candidates={len(candidates)} policy=nearest depth device={self.inference_device}"
             cv2.putText(
                 vis,
                 detail,

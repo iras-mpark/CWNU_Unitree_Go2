@@ -10,7 +10,7 @@ This rewrite keeps the same hardware assumptions as the original project:
 The system is intentionally split into **two ROS2 Python packages** because the camera/YOLO side and the Go2/LiDAR/control side may run on different devices.
 
 ```text
-oak_yolo_target       # OAK RGB-D + native Ultralytics YOLO tracking -> 3D person target
+oak_yolo_target       # OAK RGB-D + native Ultralytics YOLO detection -> nearest 3D person target
 go2_lidar_planner     # LiDAR accumulation + potential-field A* + Go2 sport API follower
 ```
 
@@ -46,8 +46,8 @@ Both devices must be on the same ROS 2 network, with matching `ROS_DOMAIN_ID` an
 
 ```text
 /oak/rgb/image_raw
-  -> Ultralytics YOLO11 track mode, person class only
-  -> chosen target track ID
+  -> Ultralytics YOLO11 detect mode, person class only
+  -> nearest valid person selected every frame; tracking IDs are ignored
 
 /oak/stereo/image_raw + /oak/stereo/camera_info
   -> robust depth from box ROI quantiles
@@ -68,19 +68,17 @@ Both devices must be on the same ROS 2 network, with matching `ROS_DOMAIN_ID` an
   -> /cmd_vel TwistStamped and /api/sport/request unitree_api/Request
 ```
 
-## Target acquisition policy
+## Target selection policy
 
-For startup without a monitor/UI, the perception node uses an automatic lock rule:
+The perception node now ignores YOLO tracking IDs by default because ID switching caused unstable following.
 
 1. Detect only class `person`.
-2. Reject invalid depth.
-3. Prefer the nearest person inside a configurable center gate.
-4. Lock only after the same candidate is stable for `acquire_stable_frames` frames.
-5. After lock, follow the same YOLO tracking ID when available.
-6. If YOLO ID is temporarily missing, short-term reacquisition uses 3D proximity.
-7. If the target is lost beyond `lost_timeout_s`, the lock is cleared.
+2. Reject invalid or out-of-range depth.
+3. Reject candidates behind the robot or beyond `acquire_max_distance_m`.
+4. Select the nearest valid person every RGB frame.
+5. Publish that person's 3D point immediately to `/local_goal_point`.
 
-This is intentionally conservative. It avoids suddenly switching to a different person every frame.
+The optional `nearest_person_use_center_gate:=true` parameter can re-enable a camera-center gate, but the default is `false` so the closest detected person is used directly.
 
 ## Depth estimation
 
@@ -163,7 +161,9 @@ ros2 launch oak_yolo_target oak_yolo_target.launch.py \
   camera_info_topic:=/oak/stereo/camera_info \
   depth_quantile_low:=0.25 \
   depth_quantile_high:=0.50 \
-  debug_jpeg_quality:=35
+  debug_jpeg_quality:=35 \
+  use_yolo_tracking:=false \
+  nearest_person_use_center_gate:=false
 ```
 
 ## Jetson TensorRT model export

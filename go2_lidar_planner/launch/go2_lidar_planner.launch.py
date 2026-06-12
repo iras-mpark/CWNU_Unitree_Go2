@@ -34,8 +34,8 @@ def generate_launch_description():
 
         # Planner / follower.
         DeclareLaunchArgument('follow_distance_m', default_value='2.0'),
-        DeclareLaunchArgument('grid_resolution_m', default_value='0.12'),
-        DeclareLaunchArgument('safety_radius_m', default_value='0.45'),
+        DeclareLaunchArgument('grid_resolution_m', default_value='0.1'),
+        DeclareLaunchArgument('safety_radius_m', default_value='0.35'),
         DeclareLaunchArgument('potential_radius_m', default_value='0.95'),
         DeclareLaunchArgument('potential_weight', default_value='4.0'),
         DeclareLaunchArgument('waypoint_potential_threshold', default_value='0.35'),

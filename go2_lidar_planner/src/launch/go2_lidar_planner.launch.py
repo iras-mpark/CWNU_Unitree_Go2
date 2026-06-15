@@ -47,7 +47,14 @@ def generate_launch_description():
         DeclareLaunchArgument('require_target_status', default_value='false'),
         DeclareLaunchArgument('max_forward_speed_mps', default_value='1.0'),
         DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.5'),
-        DeclareLaunchArgument('max_yaw_rate_rps', default_value='1.0'),
+        # Yaw damping. These defaults intentionally prioritize stable following
+        # over exact pixel-center alignment because YOLO/depth target points jitter.
+        DeclareLaunchArgument('yaw_gain', default_value='0.9'),
+        DeclareLaunchArgument('max_yaw_rate_rps', default_value='0.55'),
+        DeclareLaunchArgument('yaw_deadband_rad', default_value='0.12'),
+        DeclareLaunchArgument('yaw_filter_alpha', default_value='0.25'),
+        DeclareLaunchArgument('yaw_slew_rate_limit_rps2', default_value='1.2'),
+        DeclareLaunchArgument('yaw_hold_when_close', default_value='true'),
         DeclareLaunchArgument('target_stale_timeout_s', default_value='2.0'),
         DeclareLaunchArgument('path_stale_timeout_s', default_value='1.5'),
     ]
@@ -117,7 +124,12 @@ def generate_launch_description():
             'api_control_enabled': ParameterValue(LaunchConfiguration('api_control_enabled'), value_type=bool),
             'max_forward_speed_mps': ParameterValue(LaunchConfiguration('max_forward_speed_mps'), value_type=float),
             'max_lateral_speed_mps': ParameterValue(LaunchConfiguration('max_lateral_speed_mps'), value_type=float),
+            'yaw_gain': ParameterValue(LaunchConfiguration('yaw_gain'), value_type=float),
             'max_yaw_rate_rps': ParameterValue(LaunchConfiguration('max_yaw_rate_rps'), value_type=float),
+            'yaw_deadband_rad': ParameterValue(LaunchConfiguration('yaw_deadband_rad'), value_type=float),
+            'yaw_filter_alpha': ParameterValue(LaunchConfiguration('yaw_filter_alpha'), value_type=float),
+            'yaw_slew_rate_limit_rps2': ParameterValue(LaunchConfiguration('yaw_slew_rate_limit_rps2'), value_type=float),
+            'yaw_hold_when_close': ParameterValue(LaunchConfiguration('yaw_hold_when_close'), value_type=bool),
             'target_stale_timeout_s': ParameterValue(LaunchConfiguration('target_stale_timeout_s'), value_type=float),
             'path_stale_timeout_s': ParameterValue(LaunchConfiguration('path_stale_timeout_s'), value_type=float),
             'target_topic': LaunchConfiguration('target_topic'),

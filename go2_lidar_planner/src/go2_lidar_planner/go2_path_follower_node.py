@@ -60,9 +60,16 @@ class Go2PathFollowerNode(Node):
         self.declare_parameter("max_lateral_speed_mps", 0.30)
         self.declare_parameter("speed_gain", 0.55)
         self.declare_parameter("slowdown_yaw_error_rad", 0.65)
-        self.declare_parameter("yaw_gain", 1.8)
-        self.declare_parameter("max_yaw_rate_rps", 1.0)
-        self.declare_parameter("yaw_deadband_rad", 0.03)
+        # Yaw control is deliberately damped.  Person detections and depth-derived
+        # target points jitter frame-to-frame; without a deadband/filter/slew limit
+        # the Go2 keeps twisting left and right while trying to keep the person at
+        # the exact image center.
+        self.declare_parameter("yaw_gain", 0.9)
+        self.declare_parameter("max_yaw_rate_rps", 0.55)
+        self.declare_parameter("yaw_deadband_rad", 0.12)
+        self.declare_parameter("yaw_filter_alpha", 0.25)
+        self.declare_parameter("yaw_slew_rate_limit_rps2", 1.2)
+        self.declare_parameter("yaw_hold_when_close", True)
 
         self.path: Optional[Path] = None
         self.path_time: Optional[Time] = None
@@ -74,6 +81,9 @@ class Go2PathFollowerNode(Node):
         self.seq = 0
         self._last_inactive_reason = "initializing"
         self._last_diag_time = self.get_clock().now() - Duration(seconds=10.0)
+        self._filtered_heading_error: Optional[float] = None
+        self._last_yaw_rate: float = 0.0
+        self._last_cmd_time: Optional[Time] = None
 
         self.create_subscription(Path, str(self.get_parameter("path_topic").value), self._path_cb, 5)
         self.create_subscription(PointStamped, str(self.get_parameter("target_topic").value), self._target_cb, 5)
@@ -126,6 +136,9 @@ class Go2PathFollowerNode(Node):
                 if bool(self.get_parameter("send_stop_on_release").value):
                     self._publish_zero(stop_api_once=True)
             self.autonomy_active = False
+            self._filtered_heading_error = None
+            self._last_yaw_rate = 0.0
+            self._last_cmd_time = None
             self._publish_follower_status(now, False, reason, None)
             self._diagnose_inactive(now, reason)
             return
@@ -176,17 +189,12 @@ class Go2PathFollowerNode(Node):
         target_distance = math.hypot(target_xy[0], target_xy[1])
         follow_distance = float(self.get_parameter("follow_distance_m").value)
         heading_error = math.atan2(target_xy[1], target_xy[0])
-        if abs(heading_error) <= float(self.get_parameter("yaw_deadband_rad").value):
-            yaw_rate = 0.0
-        else:
-            yaw_rate = self._clip(
-                float(self.get_parameter("yaw_gain").value) * heading_error,
-                -float(self.get_parameter("max_yaw_rate_rps").value),
-                float(self.get_parameter("max_yaw_rate_rps").value),
-            )
-        cmd.twist.angular.z = yaw_rate
+        cmd.twist.angular.z = self._compute_yaw_rate(now, heading_error, target_distance)
 
         # If already within the desired person-following distance, only yaw-align.
+        # With yaw_hold_when_close=true, _compute_yaw_rate() also applies a wider
+        # practical deadband near the target so the robot does not keep wiggling
+        # while already standing at the desired following distance.
         if target_distance <= follow_distance + float(self.get_parameter("goal_tolerance_m").value):
             return cmd
 
@@ -211,6 +219,52 @@ class Go2PathFollowerNode(Node):
         cmd.twist.linear.x = self._clip(vx, -float(self.get_parameter("max_forward_speed_mps").value), float(self.get_parameter("max_forward_speed_mps").value))
         cmd.twist.linear.y = self._clip(vy, -max_lat, max_lat)
         return cmd
+
+    def _compute_yaw_rate(self, now: Time, heading_error: float, target_distance: float) -> float:
+        """Return a damped yaw-rate command from target bearing.
+
+        The raw target bearing can change abruptly because the selected person box,
+        depth quantile, and ROS network timing all jitter.  This method uses:
+        1) an angular deadband, 2) EMA filtering of heading error, and
+        3) a yaw-rate slew limit.
+        """
+        deadband = float(self.get_parameter("yaw_deadband_rad").value)
+        if bool(self.get_parameter("yaw_hold_when_close").value):
+            follow_distance = float(self.get_parameter("follow_distance_m").value)
+            goal_tolerance = float(self.get_parameter("goal_tolerance_m").value)
+            if target_distance <= follow_distance + goal_tolerance:
+                # Close-range depth/detection jitter is visually amplified.  Use a
+                # slightly wider deadband while already within the desired distance.
+                deadband = max(deadband, 0.16)
+
+        alpha = self._clip(float(self.get_parameter("yaw_filter_alpha").value), 0.0, 1.0)
+        if self._filtered_heading_error is None:
+            self._filtered_heading_error = heading_error
+        else:
+            self._filtered_heading_error = (1.0 - alpha) * self._filtered_heading_error + alpha * heading_error
+
+        err = self._filtered_heading_error
+        if abs(err) <= deadband:
+            desired = 0.0
+        else:
+            # Remove the deadband offset to avoid a sudden jump when leaving it.
+            effective_err = math.copysign(abs(err) - deadband, err)
+            desired = float(self.get_parameter("yaw_gain").value) * effective_err
+
+        max_rate = float(self.get_parameter("max_yaw_rate_rps").value)
+        desired = self._clip(desired, -max_rate, max_rate)
+
+        slew = max(0.0, float(self.get_parameter("yaw_slew_rate_limit_rps2").value))
+        if self._last_cmd_time is None or slew <= 0.0:
+            limited = desired
+        else:
+            dt = max(1e-3, float((now - self._last_cmd_time).nanoseconds) * 1e-9)
+            max_delta = slew * dt
+            limited = self._clip(desired, self._last_yaw_rate - max_delta, self._last_yaw_rate + max_delta)
+
+        self._last_cmd_time = now
+        self._last_yaw_rate = limited
+        return limited
 
     def _select_lookahead_point(self, path: Path, lookahead: float) -> Tuple[float, float]:
         if not path.poses:
@@ -281,6 +335,12 @@ class Go2PathFollowerNode(Node):
                 "vx": float(cmd.twist.linear.x),
                 "vy": float(cmd.twist.linear.y),
                 "yaw_rate": float(cmd.twist.angular.z),
+            }
+            payload["yaw_debug"] = {
+                "filtered_heading_error_rad": self._filtered_heading_error,
+                "deadband_rad": float(self.get_parameter("yaw_deadband_rad").value),
+                "filter_alpha": float(self.get_parameter("yaw_filter_alpha").value),
+                "slew_rate_limit_rps2": float(self.get_parameter("yaw_slew_rate_limit_rps2").value),
             }
         self.status_pub.publish(String(data=json.dumps(payload)))
 

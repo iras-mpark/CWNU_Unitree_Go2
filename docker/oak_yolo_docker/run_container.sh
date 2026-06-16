@@ -21,7 +21,7 @@ sudo docker run -d \
   --ipc host \
   --privileged \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" \
-  -e RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}" \
+  -e RMW_IMPLEMENTATION="rmw_fastrtps_cpp" \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e LAUNCH_OAK_DRIVER="${LAUNCH_OAK_DRIVER:-true}" \

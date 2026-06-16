@@ -153,7 +153,7 @@ class PotentialAStarPlannerNode(Node):
             self._publish_point(self.waypoint_pub, (0.0, 0.0), now)
             return
 
-        adjusted = self._adjust_waypoint_to_free_boundary(desired, inflated, potential)
+        adjusted = self._adjust_waypoint_to_free_boundary(desired, inflated, potential, target_xy=target_xy)
         self._publish_point(self.waypoint_pub, adjusted, now)
         path_points = self._astar((0.0, 0.0), adjusted, inflated, potential)
         if not path_points:
@@ -237,7 +237,11 @@ class PotentialAStarPlannerNode(Node):
                     yield (cx + dx, cy + dy), math.sqrt(d2)
 
     def _adjust_waypoint_to_free_boundary(
-        self, waypoint: Point2, inflated: Set[Cell], potential: Dict[Cell, float]
+        self,
+        waypoint: Point2,
+        inflated: Set[Cell],
+        potential: Dict[Cell, float],
+        target_xy: Optional[Point2] = None,
     ) -> Point2:
         start = self._world_to_cell(*waypoint)
         if start is None:
@@ -248,6 +252,11 @@ class PotentialAStarPlannerNode(Node):
 
         def acceptable(c: Cell) -> bool:
             return self._cell_in_bounds(c) and c not in inflated and potential.get(c, 0.0) <= threshold
+
+        if target_xy is not None:
+            boundary_waypoint = self._target_component_boundary_waypoint(target_xy, inflated, potential, threshold)
+            if boundary_waypoint is not None:
+                return boundary_waypoint
 
         if acceptable(start):
             return waypoint
@@ -267,6 +276,55 @@ class PotentialAStarPlannerNode(Node):
                 visited.add(nb)
                 heapq.heappush(queue, (dist_cells + 1, nb))
         return waypoint
+
+    def _target_component_boundary_waypoint(
+        self, target_xy: Point2, inflated: Set[Cell], potential: Dict[Cell, float], threshold: float
+    ) -> Optional[Point2]:
+        target_cell = self._world_to_cell(*target_xy)
+        if target_cell is None or target_cell not in inflated:
+            return None
+
+        component = self._connected_component(target_cell, inflated)
+        if not component:
+            return None
+
+        tx, ty = target_xy
+        target_dist = math.hypot(tx, ty)
+        if target_dist < 1e-6:
+            return None
+
+        step = max(self.resolution * 0.5, 0.01)
+        samples = max(1, int(math.ceil(target_dist / step)))
+        last_acceptable: Optional[Cell] = None
+
+        for i in range(samples + 1):
+            scale = min(1.0, (i * step) / target_dist)
+            c = self._world_to_cell(tx * scale, ty * scale)
+            if c is None:
+                continue
+            if c in component:
+                return self._cell_to_world(last_acceptable) if last_acceptable is not None else None
+            if c in inflated:
+                return None
+            if potential.get(c, 0.0) <= threshold:
+                last_acceptable = c
+
+        return None
+
+    def _connected_component(self, start: Cell, cells: Set[Cell]) -> Set[Cell]:
+        if start not in cells:
+            return set()
+        component: Set[Cell] = set()
+        queue = [start]
+        while queue:
+            c = queue.pop()
+            if c in component:
+                continue
+            component.add(c)
+            for nb in self._neighbors8(c):
+                if nb in cells and nb not in component:
+                    queue.append(nb)
+        return component
 
     # ---------------------------------------------------------------- A*
     def _astar(

@@ -27,13 +27,13 @@ class LidarAccumulatorNode(Node):
         self.declare_parameter("max_clouds", 10)
         self.declare_parameter("publish_rate_hz", 15.0)
         self.declare_parameter("grid_resolution_m", 0.12)
-        self.declare_parameter("grid_x_min_m", 0.0)
+        self.declare_parameter("grid_x_min_m", -1.0)
         self.declare_parameter("grid_x_max_m", 6.0)
         self.declare_parameter("grid_y_min_m", -3.5)
         self.declare_parameter("grid_y_max_m", 3.5)
         self.declare_parameter("obstacle_z_min_m", 0.1)
         self.declare_parameter("obstacle_z_max_m", 1.2)
-        self.declare_parameter("min_obstacle_range_m", 0.10)
+        self.declare_parameter("min_obstacle_range_m", 0.05)
         self.declare_parameter("max_obstacle_range_m", 6.0)
         self.declare_parameter("min_points_per_cell", 2)
 
@@ -55,6 +55,7 @@ class LidarAccumulatorNode(Node):
         self.fields = None
         self.frame_id = ""
         self.last_debug = self.get_clock().now()
+
         self.create_subscription(PointCloud2, self.input_topic, self._cloud_cb, 10)
         self.pub = self.create_publisher(PointCloud2, self.output_topic, 10)
         self.occupancy_pub = self.create_publisher(OccupancyGrid, self.occupancy_grid_topic, 10)
@@ -65,11 +66,6 @@ class LidarAccumulatorNode(Node):
             f"ogm={self.occupancy_grid_topic}, window={self.history_duration.nanoseconds/1e9:.2f}s, "
             f"max_clouds={self.max_clouds}"
         )
-
-    def _effective_obstacle_z_bounds(self) -> Tuple[float, float]:
-        z_min = float(self.get_parameter("obstacle_z_min_m").value)
-        z_max = float(self.get_parameter("obstacle_z_max_m").value)
-        return (min(z_min, z_max), max(z_min, z_max))
 
     def _cloud_cb(self, cloud: PointCloud2) -> None:
         now = self.get_clock().now()
@@ -93,7 +89,6 @@ class LidarAccumulatorNode(Node):
         all_points: List[Tuple[float, ...]] = []
         for _, pts in self.history:
             all_points.extend(pts)
-        all_points = [point for point in all_points if float(point[0]) >= self.x_min]
 
         header = Header()
         header.stamp = now.to_msg()
@@ -110,17 +105,14 @@ class LidarAccumulatorNode(Node):
 
         if now - self.last_debug > Duration(seconds=1.0):
             self.last_debug = now
-            z_min, z_max = self._effective_obstacle_z_bounds()
-            r_min = float(self.get_parameter("min_obstacle_range_m").value)
-            self.debug_pub.publish(
-                String(data=f"clouds={len(self.history)}, points={len(all_points)}, obstacle_z=[{z_min:.2f},{z_max:.2f}], obstacle_xy_min={r_min:.2f}")
-            )
+            self.debug_pub.publish(String(data=f"clouds={len(self.history)}, points={len(all_points)}"))
+
 
     def _build_occupancy_grid(self, points: List[Tuple[float, ...]], header: Header) -> OccupancyGrid:
-        z_min, z_max = self._effective_obstacle_z_bounds()
+        z_min = float(self.get_parameter("obstacle_z_min_m").value)
+        z_max = float(self.get_parameter("obstacle_z_max_m").value)
         r_min = float(self.get_parameter("min_obstacle_range_m").value)
         r_max = float(self.get_parameter("max_obstacle_range_m").value)
-        r_min, r_max = min(r_min, r_max), max(r_min, r_max)
         min_hits = max(1, int(self.get_parameter("min_points_per_cell").value))
         hit_counts = [0] * (self.width * self.height)
 
@@ -128,8 +120,8 @@ class LidarAccumulatorNode(Node):
             x, y, z = float(point[0]), float(point[1]), float(point[2])
             if z < z_min or z > z_max:
                 continue
-            distance_xy = math.hypot(x, y)
-            if distance_xy < r_min or distance_xy > r_max:
+            distance = math.hypot(x, y)
+            if distance < r_min or distance > r_max:
                 continue
             ix = int(math.floor((x - self.x_min) / self.resolution))
             iy = int(math.floor((y - self.y_min) / self.resolution))

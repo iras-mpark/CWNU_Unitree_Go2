@@ -43,11 +43,15 @@ class PotentialAStarPlannerNode(Node):
         self.declare_parameter("max_path_length_m", 4.0)
         self.declare_parameter("path_resolution_m", 0.20)
         self.declare_parameter("grid_resolution_m", 0.12)
-        self.declare_parameter("grid_x_min_m", 0.0)
-        self.declare_parameter("grid_x_max_m", 3.0)
-        self.declare_parameter("grid_y_min_m", -1.5)
-        self.declare_parameter("grid_y_max_m", 1.5)
+        self.declare_parameter("grid_x_min_m", -1.0)
+        self.declare_parameter("grid_x_max_m", 6.0)
+        self.declare_parameter("grid_y_min_m", -3.5)
+        self.declare_parameter("grid_y_max_m", 3.5)
 
+        self.declare_parameter("obstacle_z_min_m", 0.05)
+        self.declare_parameter("obstacle_z_max_m", 1.20)
+        self.declare_parameter("min_obstacle_range_m", 0.05)
+        self.declare_parameter("max_obstacle_range_m", 6.0)
         self.declare_parameter("safety_radius_m", 0.45)
         self.declare_parameter("potential_radius_m", 0.95)
         self.declare_parameter("potential_weight", 4.0)
@@ -85,9 +89,12 @@ class PotentialAStarPlannerNode(Node):
         self.potential_pub = self.create_publisher(OccupancyGrid, str(self.get_parameter("potential_grid_topic").value), 5)
         rate = max(1.0, float(self.get_parameter("publish_rate_hz").value))
         self.create_timer(1.0 / rate, self._timer_cb)
+        obstacle_z_min = float(self.get_parameter("obstacle_z_min_m").value)
+        obstacle_z_max = float(self.get_parameter("obstacle_z_max_m").value)
         self.get_logger().info(
             f"Potential A* planner ready: ogm={self.occupancy_input_topic}, target={self.target_topic}, "
-            f"grid={self.width}x{self.height}@{self.resolution:.2f}m"
+            f"grid={self.width}x{self.height}@{self.resolution:.2f}m, "
+            f"obstacle_z=[{obstacle_z_min:.2f}, {obstacle_z_max:.2f}]m"
         )
 
     # ---------------------------------------------------------------- callbacks

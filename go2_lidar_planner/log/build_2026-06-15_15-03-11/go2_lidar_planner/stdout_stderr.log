@@ -1,0 +1,49 @@
+running egg_info
+creating ../build/go2_lidar_planner/go2_lidar_planner.egg-info
+writing ../build/go2_lidar_planner/go2_lidar_planner.egg-info/PKG-INFO
+writing dependency_links to ../build/go2_lidar_planner/go2_lidar_planner.egg-info/dependency_links.txt
+writing entry points to ../build/go2_lidar_planner/go2_lidar_planner.egg-info/entry_points.txt
+writing requirements to ../build/go2_lidar_planner/go2_lidar_planner.egg-info/requires.txt
+writing top-level names to ../build/go2_lidar_planner/go2_lidar_planner.egg-info/top_level.txt
+writing manifest file '../build/go2_lidar_planner/go2_lidar_planner.egg-info/SOURCES.txt'
+reading manifest file '../build/go2_lidar_planner/go2_lidar_planner.egg-info/SOURCES.txt'
+writing manifest file '../build/go2_lidar_planner/go2_lidar_planner.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner
+copying go2_lidar_planner/go2_path_follower_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner
+copying go2_lidar_planner/lidar_transformer_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner
+copying go2_lidar_planner/__init__.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner
+copying go2_lidar_planner/potential_astar_planner_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner
+copying go2_lidar_planner/lidar_accumulator_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner
+running install
+running install_lib
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner
+copying /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner/go2_path_follower_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner
+copying /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner/lidar_transformer_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner
+copying /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner/__init__.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner
+copying /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner/potential_astar_planner_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner
+copying /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build/lib/go2_lidar_planner/lidar_accumulator_node.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner
+byte-compiling /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner/go2_path_follower_node.py to go2_path_follower_node.cpython-38.pyc
+byte-compiling /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner/lidar_transformer_node.py to lidar_transformer_node.cpython-38.pyc
+byte-compiling /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner/__init__.py to __init__.cpython-38.pyc
+byte-compiling /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner/potential_astar_planner_node.py to potential_astar_planner_node.cpython-38.pyc
+byte-compiling /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner/lidar_accumulator_node.py to lidar_accumulator_node.cpython-38.pyc
+running install_data
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/ament_index
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/ament_index/resource_index
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/ament_index/resource_index/packages
+copying resource/go2_lidar_planner -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/ament_index/resource_index/packages
+copying package.xml -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/go2_lidar_planner
+creating /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/go2_lidar_planner/launch
+copying launch/go2_lidar_planner.launch.py -> /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/share/go2_lidar_planner/launch
+running install_egg_info
+Copying ../build/go2_lidar_planner/go2_lidar_planner.egg-info to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2_lidar_planner-0.1.0-py3.8.egg-info
+running install_scripts
+Installing go2_path_follower_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+Installing lidar_accumulator_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+Installing lidar_transformer_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+Installing potential_astar_planner_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+writing list of installed files to '/root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/install.log'

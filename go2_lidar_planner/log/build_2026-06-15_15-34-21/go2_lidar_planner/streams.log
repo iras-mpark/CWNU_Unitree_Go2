@@ -1,0 +1,20 @@
+[1.201s] Invoking command in '/root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner': PYTHONPATH=/root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/prefix_override:/usr/local/lib/python3.8/dist-packages/colcon_core/task/python/colcon_distutils_commands:/root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build --no-deps symlink_data
+[1.614s] running develop
+[1.799s] running egg_info
+[1.800s] writing go2_lidar_planner.egg-info/PKG-INFO
+[1.801s] writing dependency_links to go2_lidar_planner.egg-info/dependency_links.txt
+[1.801s] writing entry points to go2_lidar_planner.egg-info/entry_points.txt
+[1.801s] writing requirements to go2_lidar_planner.egg-info/requires.txt
+[1.801s] writing top-level names to go2_lidar_planner.egg-info/top_level.txt
+[1.862s] reading manifest file 'go2_lidar_planner.egg-info/SOURCES.txt'
+[1.864s] writing manifest file 'go2_lidar_planner.egg-info/SOURCES.txt'
+[1.867s] running build_ext
+[1.867s] Creating /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages/go2-lidar-planner.egg-link (link to .)
+[1.870s] Installing go2_path_follower_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+[1.870s] Installing lidar_accumulator_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+[1.870s] Installing lidar_transformer_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+[1.871s] Installing potential_astar_planner_node script to /root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/go2_lidar_planner
+[1.872s] 
+[1.872s] Installed /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner
+[1.872s] running symlink_data
+[1.936s] Invoked command in '/root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner' returned '0': PYTHONPATH=/root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/prefix_override:/usr/local/lib/python3.8/dist-packages/colcon_core/task/python/colcon_distutils_commands:/root/CWNU_Unitree_Go2/go2_lidar_planner/install/go2_lidar_planner/lib/python3.8/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /root/CWNU_Unitree_Go2/go2_lidar_planner/build/go2_lidar_planner/build --no-deps symlink_data

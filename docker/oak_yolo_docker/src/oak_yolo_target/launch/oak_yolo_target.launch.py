@@ -53,6 +53,19 @@ def generate_launch_description():
         DeclareLaunchArgument('depth_roi_max_pixels', default_value='180'),
         DeclareLaunchArgument('depth_sample_stride', default_value='2'),
 
+        # Kalman filter before publishing /local_goal_point.
+        # The KF smooths noisy depth and associates multiple person detections
+        # by nearest distance to the predicted filter estimate.
+        DeclareLaunchArgument('use_kalman_filter', default_value='true'),
+        DeclareLaunchArgument('kalman_process_noise_std_m', default_value='0.18'),
+        DeclareLaunchArgument('kalman_measurement_noise_x_m', default_value='0.35'),
+        DeclareLaunchArgument('kalman_measurement_noise_y_m', default_value='0.18'),
+        DeclareLaunchArgument('kalman_measurement_noise_z_m', default_value='0.25'),
+        DeclareLaunchArgument('kalman_initial_variance_m2', default_value='0.25'),
+        DeclareLaunchArgument('kalman_association_gate_m', default_value='1.20'),
+        DeclareLaunchArgument('kalman_reset_timeout_s', default_value='1.50'),
+        DeclareLaunchArgument('kalman_publish_prediction_without_measurement', default_value='false'),
+
         # Compressed debug image for wireless monitoring.
         DeclareLaunchArgument('publish_debug_image', default_value='true'),
         DeclareLaunchArgument('publish_debug_raw_image', default_value='true'),
@@ -113,6 +126,15 @@ def generate_launch_description():
             'acquire_max_distance_m': ParameterValue(LaunchConfiguration('acquire_max_distance_m'), value_type=float),
             'nearest_person_use_center_gate': ParameterValue(LaunchConfiguration('nearest_person_use_center_gate'), value_type=bool),
             'lost_timeout_s': ParameterValue(LaunchConfiguration('lost_timeout_s'), value_type=float),
+            'use_kalman_filter': ParameterValue(LaunchConfiguration('use_kalman_filter'), value_type=bool),
+            'kalman_process_noise_std_m': ParameterValue(LaunchConfiguration('kalman_process_noise_std_m'), value_type=float),
+            'kalman_measurement_noise_x_m': ParameterValue(LaunchConfiguration('kalman_measurement_noise_x_m'), value_type=float),
+            'kalman_measurement_noise_y_m': ParameterValue(LaunchConfiguration('kalman_measurement_noise_y_m'), value_type=float),
+            'kalman_measurement_noise_z_m': ParameterValue(LaunchConfiguration('kalman_measurement_noise_z_m'), value_type=float),
+            'kalman_initial_variance_m2': ParameterValue(LaunchConfiguration('kalman_initial_variance_m2'), value_type=float),
+            'kalman_association_gate_m': ParameterValue(LaunchConfiguration('kalman_association_gate_m'), value_type=float),
+            'kalman_reset_timeout_s': ParameterValue(LaunchConfiguration('kalman_reset_timeout_s'), value_type=float),
+            'kalman_publish_prediction_without_measurement': ParameterValue(LaunchConfiguration('kalman_publish_prediction_without_measurement'), value_type=bool),
             'publish_debug_image': ParameterValue(LaunchConfiguration('publish_debug_image'), value_type=bool),
             'publish_debug_raw_image': ParameterValue(LaunchConfiguration('publish_debug_raw_image'), value_type=bool),
             'publish_target_camera_info': ParameterValue(LaunchConfiguration('publish_target_camera_info'), value_type=bool),

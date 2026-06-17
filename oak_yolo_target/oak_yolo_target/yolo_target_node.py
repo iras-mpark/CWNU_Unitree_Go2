@@ -48,6 +48,83 @@ class PersonCandidate:
     point_xyz: Tuple[float, float, float]
     center_uv_rgb: Tuple[float, float]
     center_uv_depth: Tuple[float, float]
+    # Raw sensor measurement before Kalman filtering.  These are kept for
+    # diagnostics after point_xyz/depth_m are replaced by the filtered output.
+    sensor_point_xyz: Optional[Tuple[float, float, float]] = None
+    sensor_depth_m: Optional[float] = None
+    association_distance_m: Optional[float] = None
+
+
+class PositionKalmanFilter3D:
+    """Constant-position 3D Kalman filter with random-walk process noise.
+
+    State is [x, y, z] in base_link.  The target is assumed to move slowly;
+    responsiveness is controlled by process noise rather than an explicit
+    velocity model.
+    """
+
+    def __init__(self) -> None:
+        self.x: Optional[np.ndarray] = None
+        self.P: Optional[np.ndarray] = None
+        self.last_predict_time: Optional[float] = None
+        self.last_update_time: Optional[float] = None
+
+    @property
+    def initialized(self) -> bool:
+        return self.x is not None and self.P is not None
+
+    def reset(self) -> None:
+        self.x = None
+        self.P = None
+        self.last_predict_time = None
+        self.last_update_time = None
+
+    def initialize(self, measurement: Sequence[float], variance: float, now: float) -> np.ndarray:
+        self.x = np.asarray(measurement, dtype=np.float64).reshape(3)
+        self.P = np.eye(3, dtype=np.float64) * max(float(variance), 1e-6)
+        self.last_predict_time = now
+        self.last_update_time = now
+        return self.x.copy()
+
+    def predict(self, process_std: float, now: float) -> np.ndarray:
+        if not self.initialized:
+            raise RuntimeError("Kalman filter is not initialized")
+        assert self.x is not None and self.P is not None
+        if self.last_predict_time is None:
+            dt = 1.0 / 30.0
+        else:
+            dt = max(1e-3, min(1.0, float(now - self.last_predict_time)))
+        q = max(float(process_std), 0.0)
+        self.P = self.P + np.eye(3, dtype=np.float64) * (q * q * dt)
+        self.last_predict_time = now
+        return self.x.copy()
+
+    def update(self, measurement: Sequence[float], measurement_std_xyz: Sequence[float], now: float) -> np.ndarray:
+        if not self.initialized:
+            init_var = max(float(measurement_std_xyz[0]) ** 2, 1e-6)
+            return self.initialize(measurement, init_var, now)
+        assert self.x is not None and self.P is not None
+        z = np.asarray(measurement, dtype=np.float64).reshape(3)
+        std = np.asarray(measurement_std_xyz, dtype=np.float64).reshape(3)
+        std = np.maximum(std, 1e-4)
+        R = np.diag(std * std)
+
+        # H = I for direct position measurement.
+        S = self.P + R
+        K = self.P @ np.linalg.inv(S)
+        innovation = z - self.x
+        self.x = self.x + K @ innovation
+        I = np.eye(3, dtype=np.float64)
+        # Joseph form keeps covariance symmetric/positive under numerical noise.
+        self.P = (I - K) @ self.P @ (I - K).T + K @ R @ K.T
+        self.last_update_time = now
+        return self.x.copy()
+
+    def covariance_diag(self) -> Tuple[float, float, float]:
+        if self.P is None:
+            return (math.nan, math.nan, math.nan)
+        d = np.diag(self.P)
+        return (float(d[0]), float(d[1]), float(d[2]))
 
 
 class OakYoloTargetNode(Node):
@@ -92,6 +169,20 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("lost_timeout_s", 1.0)
         self.declare_parameter("reacquire_distance_gate_m", 1.0)
         self.declare_parameter("nearest_person_use_center_gate", False)
+
+        # Kalman filtering / association.  The filter output is the final
+        # /local_goal_point.  When initialized, target association chooses the
+        # person measurement closest to the predicted KF state instead of simply
+        # the nearest person in depth.
+        self.declare_parameter("use_kalman_filter", True)
+        self.declare_parameter("kalman_process_noise_std_m", 0.18)
+        self.declare_parameter("kalman_measurement_noise_x_m", 0.35)
+        self.declare_parameter("kalman_measurement_noise_y_m", 0.18)
+        self.declare_parameter("kalman_measurement_noise_z_m", 0.25)
+        self.declare_parameter("kalman_initial_variance_m2", 0.25)
+        self.declare_parameter("kalman_association_gate_m", 1.20)
+        self.declare_parameter("kalman_reset_timeout_s", 1.50)
+        self.declare_parameter("kalman_publish_prediction_without_measurement", False)
 
         # Depth handling.
         self.declare_parameter("depth_min_m", 0.25)
@@ -145,6 +236,8 @@ class OakYoloTargetNode(Node):
         self._candidate_count: int = 0
         self._last_debug_pub_time: float = 0.0
         self._last_warn_time: float = 0.0
+        self.kalman_filter = PositionKalmanFilter3D()
+        self._last_kalman_debug: Dict[str, Any] = {"enabled": bool(self.get_parameter("use_kalman_filter").value)}
 
         self.create_subscription(Image, self.depth_topic, self._depth_callback, 5)
         self.create_subscription(CameraInfo, self.camera_info_topic, self._camera_info_callback, 5)
@@ -358,6 +451,8 @@ class OakYoloTargetNode(Node):
                     point_xyz=point_xyz,
                     center_uv_rgb=center_uv_rgb,
                     center_uv_depth=center_uv_depth,
+                    sensor_point_xyz=point_xyz,
+                    sensor_depth_m=depth_m,
                 )
             )
         return candidates
@@ -529,22 +624,17 @@ class OakYoloTargetNode(Node):
     def _select_target(
         self, candidates: List[PersonCandidate], image_width: int
     ) -> Optional[PersonCandidate]:
-        """Select the nearest valid person every frame.
+        """Select and filter target.
 
-        YOLO tracking IDs are intentionally ignored.  This prevents unstable ID
-        switches from clearing the target lock or causing the robot to stop.
+        Without a Kalman filter, this falls back to nearest valid person.  With
+        the KF enabled, the first target initializes the filter; after that,
+        candidates are associated by distance to the predicted KF estimate.
         """
         now = time.monotonic()
         self.locked_track_id = None
 
-        if not candidates:
-            self.locked_last_point = None
-            self.locked_last_seen_time = None
-            self._candidate_key = None
-            self._candidate_count = 0
-            return None
-
         if not bool(self.get_parameter("auto_acquire").value):
+            self._last_kalman_debug = {"enabled": bool(self.get_parameter("use_kalman_filter").value), "reason": "auto_acquire_false"}
             return None
 
         max_dist = float(self.get_parameter("acquire_max_distance_m").value)
@@ -563,21 +653,168 @@ class OakYoloTargetNode(Node):
                     continue
             valid.append(cand)
 
+        use_kf = bool(self.get_parameter("use_kalman_filter").value)
+        if not use_kf:
+            self._last_kalman_debug = {"enabled": False, "reason": "disabled"}
+            return self._select_nearest_valid_without_kf(valid, now)
+
+        if not valid:
+            return self._handle_no_kalman_measurement(now)
+
+        process_std = float(self.get_parameter("kalman_process_noise_std_m").value)
+        meas_std = (
+            float(self.get_parameter("kalman_measurement_noise_x_m").value),
+            float(self.get_parameter("kalman_measurement_noise_y_m").value),
+            float(self.get_parameter("kalman_measurement_noise_z_m").value),
+        )
+        init_var = float(self.get_parameter("kalman_initial_variance_m2").value)
+        association_gate = float(self.get_parameter("kalman_association_gate_m").value)
+        reset_timeout = float(self.get_parameter("kalman_reset_timeout_s").value)
+
+        if not self.kalman_filter.initialized:
+            chosen = min(valid, key=lambda c: (c.depth_m, -c.confidence))
+            filtered = self.kalman_filter.initialize(chosen.point_xyz, init_var, now)
+            return self._finalize_kalman_target(
+                chosen=chosen,
+                filtered=filtered,
+                now=now,
+                mode="initialize_nearest",
+                association_distance=0.0,
+                valid_count=len(valid),
+            )
+
+        predicted = self.kalman_filter.predict(process_std=process_std, now=now)
+        scored: List[Tuple[float, PersonCandidate]] = []
+        for cand in valid:
+            z = np.asarray(cand.point_xyz, dtype=np.float64)
+            d = float(np.linalg.norm(z - predicted))
+            scored.append((d, cand))
+        scored.sort(key=lambda item: (item[0], item[1].depth_m, -item[1].confidence))
+        association_distance, chosen = scored[0]
+
+        last_update = self.kalman_filter.last_update_time
+        age_since_update = math.inf if last_update is None else max(0.0, now - last_update)
+        gate_enabled = association_gate > 0.0
+        if gate_enabled and association_distance > association_gate:
+            if age_since_update >= reset_timeout:
+                self.kalman_filter.reset()
+                filtered = self.kalman_filter.initialize(chosen.point_xyz, init_var, now)
+                return self._finalize_kalman_target(
+                    chosen=chosen,
+                    filtered=filtered,
+                    now=now,
+                    mode="reinitialize_after_gate_timeout",
+                    association_distance=association_distance,
+                    valid_count=len(valid),
+                )
+
+            self._candidate_key = "kf_no_association"
+            self._candidate_count = len(valid)
+            self._last_kalman_debug = {
+                "enabled": True,
+                "mode": "no_association_outside_gate",
+                "association_distance_m": association_distance,
+                "association_gate_m": association_gate,
+                "age_since_update_s": age_since_update,
+                "valid_count": len(valid),
+                "prediction": self._xyz_dict(tuple(float(v) for v in predicted)),
+                "covariance_diag": self._covariance_dict(),
+            }
+            if bool(self.get_parameter("kalman_publish_prediction_without_measurement").value):
+                pseudo = min(valid, key=lambda c: (c.depth_m, -c.confidence))
+                pseudo.sensor_point_xyz = pseudo.point_xyz
+                pseudo.sensor_depth_m = pseudo.depth_m
+                pseudo.point_xyz = tuple(float(v) for v in predicted)
+                pseudo.depth_m = float(predicted[0])
+                pseudo.association_distance_m = association_distance
+                self.locked_last_point = pseudo.point_xyz
+                self.locked_last_seen_time = now
+                return pseudo
+            return None
+
+        filtered = self.kalman_filter.update(chosen.point_xyz, meas_std, now)
+        return self._finalize_kalman_target(
+            chosen=chosen,
+            filtered=filtered,
+            now=now,
+            mode="update_associated",
+            association_distance=association_distance,
+            valid_count=len(valid),
+        )
+
+    def _select_nearest_valid_without_kf(self, valid: List[PersonCandidate], now: float) -> Optional[PersonCandidate]:
         if not valid:
             self.locked_last_point = None
             self.locked_last_seen_time = None
             self._candidate_key = None
             self._candidate_count = 0
             return None
-
-        # Closest in metric 3D forward distance is the most direct criterion for
-        # following.  Confidence is only a tie-breaker.
         chosen = min(valid, key=lambda c: (c.depth_m, -c.confidence))
         self.locked_last_point = chosen.point_xyz
         self.locked_last_seen_time = now
         self._candidate_key = "nearest_person"
         self._candidate_count = len(valid)
         return chosen
+
+    def _handle_no_kalman_measurement(self, now: float) -> Optional[PersonCandidate]:
+        reset_timeout = float(self.get_parameter("kalman_reset_timeout_s").value)
+        last_update = self.kalman_filter.last_update_time
+        age_since_update = math.inf if last_update is None else max(0.0, now - last_update)
+        if self.kalman_filter.initialized and age_since_update >= reset_timeout:
+            self.kalman_filter.reset()
+        self.locked_last_point = None
+        self.locked_last_seen_time = None
+        self._candidate_key = None
+        self._candidate_count = 0
+        self._last_kalman_debug = {
+            "enabled": True,
+            "mode": "no_measurement",
+            "age_since_update_s": age_since_update,
+            "reset_timeout_s": reset_timeout,
+            "initialized": self.kalman_filter.initialized,
+            "covariance_diag": self._covariance_dict(),
+        }
+        return None
+
+    def _finalize_kalman_target(
+        self,
+        chosen: PersonCandidate,
+        filtered: np.ndarray,
+        now: float,
+        mode: str,
+        association_distance: float,
+        valid_count: int,
+    ) -> PersonCandidate:
+        raw_point = chosen.point_xyz
+        raw_depth = chosen.depth_m
+        filtered_tuple = tuple(float(v) for v in filtered.reshape(3))
+        chosen.sensor_point_xyz = raw_point
+        chosen.sensor_depth_m = raw_depth
+        chosen.point_xyz = filtered_tuple
+        chosen.depth_m = float(filtered_tuple[0])
+        chosen.association_distance_m = float(association_distance)
+        self.locked_last_point = filtered_tuple
+        self.locked_last_seen_time = now
+        self._candidate_key = "kalman_associated_person"
+        self._candidate_count = valid_count
+        self._last_kalman_debug = {
+            "enabled": True,
+            "mode": mode,
+            "association_distance_m": float(association_distance),
+            "association_gate_m": float(self.get_parameter("kalman_association_gate_m").value),
+            "valid_count": valid_count,
+            "sensor_point": self._xyz_dict(raw_point),
+            "filtered_point": self._xyz_dict(filtered_tuple),
+            "covariance_diag": self._covariance_dict(),
+        }
+        return chosen
+
+    def _xyz_dict(self, xyz: Sequence[float]) -> Dict[str, float]:
+        return {"x": float(xyz[0]), "y": float(xyz[1]), "z": float(xyz[2])}
+
+    def _covariance_dict(self) -> Dict[str, float]:
+        cx, cy, cz = self.kalman_filter.covariance_diag()
+        return {"x": cx, "y": cy, "z": cz}
 
     def _update_lock(self, cand: PersonCandidate, now: float) -> None:
         # Backward-compatible helper; track_id is intentionally ignored.
@@ -593,6 +830,9 @@ class OakYoloTargetNode(Node):
         self.locked_last_seen_time = None
         self._candidate_key = None
         self._candidate_count = 0
+        if bool(self.get_parameter("use_kalman_filter").value):
+            self.kalman_filter.reset()
+            self._last_kalman_debug = {"enabled": True, "mode": "reset_by_clear_lock"}
 
     # --------------------------------------------------------------- publish
     def _publish_target(self, target: PersonCandidate, stamp: Any) -> None:
@@ -610,7 +850,8 @@ class OakYoloTargetNode(Node):
         payload: Dict[str, Any] = {
             "tracked": bool(tracked),
             "locked_track_id": None,
-            "selection_policy": "nearest_person_no_track_id",
+            "selection_policy": "kalman_association_nearest_to_prediction" if bool(self.get_parameter("use_kalman_filter").value) else "nearest_person_no_track_id",
+            "kalman_filter": self._last_kalman_debug,
             "reason": reason,
             "inference_device": self.inference_device,
             "yolo_error": self._last_yolo_error,
@@ -626,6 +867,9 @@ class OakYoloTargetNode(Node):
                     "confidence": target.confidence,
                     "depth_m": target.depth_m,
                     "point": {"x": x, "y": y, "z": z},
+                    "sensor_depth_m": target.sensor_depth_m,
+                    "sensor_point": self._xyz_dict(target.sensor_point_xyz if target.sensor_point_xyz is not None else target.point_xyz),
+                    "association_distance_m": target.association_distance_m,
                     "bbox_xyxy": [x1, y1, x2, y2],
                     "target_heading_rad": math.atan2(y, x),
                 }
@@ -696,7 +940,10 @@ class OakYoloTargetNode(Node):
             color = (0, 255, 0) if is_target else (0, 180, 255)
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, thickness)
             label = f"{cand.class_name} {cand.confidence:.2f}"
-            label += f" {cand.depth_m:.2f}m"
+            if is_target and cand.sensor_depth_m is not None and bool(self.get_parameter("use_kalman_filter").value):
+                label += f" raw {cand.sensor_depth_m:.2f}m KF {cand.depth_m:.2f}m"
+            else:
+                label += f" {cand.depth_m:.2f}m"
             cv2.putText(
                 vis,
                 label,
@@ -719,7 +966,8 @@ class OakYoloTargetNode(Node):
                 2,
                 cv2.LINE_AA,
             )
-            detail = f"candidates={len(candidates)} policy=nearest depth device={self.inference_device}"
+            kf_mode = self._last_kalman_debug.get("mode", "off") if isinstance(self._last_kalman_debug, dict) else "off"
+            detail = f"candidates={len(candidates)} policy=KF-nearest-pred mode={kf_mode} device={self.inference_device}"
             cv2.putText(
                 vis,
                 detail,

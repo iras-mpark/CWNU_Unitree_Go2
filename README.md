@@ -327,3 +327,35 @@ PY
 ## v12 integration note
 
 The Go2-side launch uses `target_stale_timeout_s:=2.0` and `path_stale_timeout_s:=1.5` by default because the OAK/YOLO node can run on a separate device and may publish `/local_goal_point` slower than the local LiDAR/control loop, especially when YOLO falls back to CPU. The planner and follower now use the same target timeout. Check `/go2_follower/status` for `target_age_s`, `path_age_s`, `target_timeout_s`, and `unitree_api_available`. If `unitree_api_available` is false, source the Unitree ROS2 interface workspace before launching this package; otherwise `/api/sport/request` cannot be published.
+
+## OAK/YOLO target Kalman filter
+
+`oak_yolo_target` now applies a constant-position 3D Kalman filter before publishing `/local_goal_point`.
+The filter has two roles:
+
+- smooth noisy OAK depth measurements before the target point is sent to the Go2 planner;
+- when multiple person detections are present, associate the measurement closest to the predicted KF estimate instead of switching to the nearest raw depth every frame.
+
+Main launch parameters:
+
+```bash
+use_kalman_filter:=true
+kalman_process_noise_std_m:=0.18
+kalman_measurement_noise_x_m:=0.35
+kalman_measurement_noise_y_m:=0.18
+kalman_measurement_noise_z_m:=0.25
+kalman_initial_variance_m2:=0.25
+kalman_association_gate_m:=1.20
+kalman_reset_timeout_s:=1.50
+kalman_publish_prediction_without_measurement:=false
+```
+
+Tuning guide:
+
+- Increase `kalman_measurement_noise_x_m` when forward/depth distance jumps too much.
+- Increase `kalman_process_noise_std_m` if the filtered target follows the person too slowly.
+- Decrease `kalman_process_noise_std_m` for stronger smoothing when the target is nearly stationary.
+- Increase `kalman_association_gate_m` if the filter loses association too easily when detections jump.
+- Decrease `kalman_association_gate_m` if the filter still switches to another nearby person.
+
+The `/target/status` JSON includes `kalman_filter`, `sensor_point`, `sensor_depth_m`, and `association_distance_m` for debugging. The debug image label shows raw depth and KF depth for the selected target.

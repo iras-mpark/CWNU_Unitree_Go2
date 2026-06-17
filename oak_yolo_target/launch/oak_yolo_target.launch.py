@@ -65,6 +65,8 @@ def generate_launch_description():
         DeclareLaunchArgument('kalman_association_gate_m', default_value='1.20'),
         DeclareLaunchArgument('kalman_reset_timeout_s', default_value='1.50'),
         DeclareLaunchArgument('kalman_publish_prediction_without_measurement', default_value='false'),
+        DeclareLaunchArgument('kalman_strict_measurement_required', default_value='true'),
+        DeclareLaunchArgument('kalman_missed_frames_to_reset', default_value='1'),
 
         # Compressed debug image for wireless monitoring.
         DeclareLaunchArgument('publish_debug_image', default_value='true'),
@@ -135,6 +137,8 @@ def generate_launch_description():
             'kalman_association_gate_m': ParameterValue(LaunchConfiguration('kalman_association_gate_m'), value_type=float),
             'kalman_reset_timeout_s': ParameterValue(LaunchConfiguration('kalman_reset_timeout_s'), value_type=float),
             'kalman_publish_prediction_without_measurement': ParameterValue(LaunchConfiguration('kalman_publish_prediction_without_measurement'), value_type=bool),
+            'kalman_strict_measurement_required': ParameterValue(LaunchConfiguration('kalman_strict_measurement_required'), value_type=bool),
+            'kalman_missed_frames_to_reset': ParameterValue(LaunchConfiguration('kalman_missed_frames_to_reset'), value_type=int),
             'publish_debug_image': ParameterValue(LaunchConfiguration('publish_debug_image'), value_type=bool),
             'publish_debug_raw_image': ParameterValue(LaunchConfiguration('publish_debug_raw_image'), value_type=bool),
             'publish_target_camera_info': ParameterValue(LaunchConfiguration('publish_target_camera_info'), value_type=bool),

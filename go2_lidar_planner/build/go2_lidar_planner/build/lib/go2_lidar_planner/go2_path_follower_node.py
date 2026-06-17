@@ -50,6 +50,9 @@ class Go2PathFollowerNode(Node):
         # control trigger.  Requiring /target/status made the robot refuse to
         # move even when /local_goal_point and /path were valid.
         self.declare_parameter("require_target_status", False)
+        # Even when require_target_status is false, a fresh tracked=false status
+        # from the perception computer should immediately release autonomy.
+        self.declare_parameter("clear_target_on_status_lost", True)
         self.declare_parameter("manual_release_when_no_target", True)
         self.declare_parameter("send_stop_on_release", True)
         self.declare_parameter("target_stale_timeout_s", 0.8)
@@ -163,6 +166,12 @@ class Go2PathFollowerNode(Node):
         except Exception:
             self.status_tracked = False
 
+        if bool(self.get_parameter("clear_target_on_status_lost").value) and not self.status_tracked:
+            self.target_xyz = None
+            self.target_time = None
+            self.path = None
+            self.path_time = None
+
     def _safety_scan_cb(self, cloud: PointCloud2) -> None:
         z_min_pos = float(self.get_parameter("safety_obstacle_z_min_m").value)
         z_min_neg = float(self.get_parameter("safety_obstacle_z_min_negative_x_m").value)
@@ -211,6 +220,10 @@ class Go2PathFollowerNode(Node):
         target_timeout = Duration(seconds=float(self.get_parameter("target_stale_timeout_s").value))
         path_timeout = Duration(seconds=float(self.get_parameter("path_stale_timeout_s").value))
         status_timeout = Duration(seconds=float(self.get_parameter("status_stale_timeout_s").value))
+
+        if bool(self.get_parameter("clear_target_on_status_lost").value):
+            if self.status_time is not None and not self.status_tracked:
+                return False, "target status tracked=false"
 
         if self.target_time is None or self.target_xyz is None:
             return False, "no target point received"

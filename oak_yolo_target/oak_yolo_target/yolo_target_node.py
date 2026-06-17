@@ -183,6 +183,12 @@ class OakYoloTargetNode(Node):
         self.declare_parameter("kalman_association_gate_m", 1.20)
         self.declare_parameter("kalman_reset_timeout_s", 1.50)
         self.declare_parameter("kalman_publish_prediction_without_measurement", False)
+        # Safety behavior: the KF must not keep driving the robot when the
+        # detector/depth pipeline no longer provides a fresh person measurement.
+        # With this enabled, prediction-only output is suppressed and the filter
+        # is reset after a small number of missed frames.
+        self.declare_parameter("kalman_strict_measurement_required", True)
+        self.declare_parameter("kalman_missed_frames_to_reset", 1)
 
         # Depth handling.
         self.declare_parameter("depth_min_m", 0.25)
@@ -237,6 +243,7 @@ class OakYoloTargetNode(Node):
         self._last_debug_pub_time: float = 0.0
         self._last_warn_time: float = 0.0
         self.kalman_filter = PositionKalmanFilter3D()
+        self._kalman_missed_frames = 0
         self._last_kalman_debug: Dict[str, Any] = {"enabled": bool(self.get_parameter("use_kalman_filter").value)}
 
         self.create_subscription(Image, self.depth_topic, self._depth_callback, 5)
@@ -655,6 +662,7 @@ class OakYoloTargetNode(Node):
 
         use_kf = bool(self.get_parameter("use_kalman_filter").value)
         if not use_kf:
+            self._kalman_missed_frames = 0
             self._last_kalman_debug = {"enabled": False, "reason": "disabled"}
             return self._select_nearest_valid_without_kf(valid, now)
 
@@ -674,6 +682,7 @@ class OakYoloTargetNode(Node):
         if not self.kalman_filter.initialized:
             chosen = min(valid, key=lambda c: (c.depth_m, -c.confidence))
             filtered = self.kalman_filter.initialize(chosen.point_xyz, init_var, now)
+            self._kalman_missed_frames = 0
             return self._finalize_kalman_target(
                 chosen=chosen,
                 filtered=filtered,
@@ -696,17 +705,28 @@ class OakYoloTargetNode(Node):
         age_since_update = math.inf if last_update is None else max(0.0, now - last_update)
         gate_enabled = association_gate > 0.0
         if gate_enabled and association_distance > association_gate:
-            if age_since_update >= reset_timeout:
+            self._kalman_missed_frames += 1
+            missed_limit = max(1, int(self.get_parameter("kalman_missed_frames_to_reset").value))
+            strict_measurement_required = bool(self.get_parameter("kalman_strict_measurement_required").value)
+            if age_since_update >= reset_timeout or self._kalman_missed_frames >= missed_limit:
                 self.kalman_filter.reset()
-                filtered = self.kalman_filter.initialize(chosen.point_xyz, init_var, now)
-                return self._finalize_kalman_target(
-                    chosen=chosen,
-                    filtered=filtered,
-                    now=now,
-                    mode="reinitialize_after_gate_timeout",
-                    association_distance=association_distance,
-                    valid_count=len(valid),
-                )
+                self.locked_last_point = None
+                self.locked_last_seen_time = None
+                self._candidate_key = None
+                self._candidate_count = len(valid)
+                self._last_kalman_debug = {
+                    "enabled": True,
+                    "mode": "association_lost_reset",
+                    "association_distance_m": association_distance,
+                    "association_gate_m": association_gate,
+                    "age_since_update_s": age_since_update,
+                    "missed_frames": self._kalman_missed_frames,
+                    "missed_frames_to_reset": missed_limit,
+                    "valid_count": len(valid),
+                    "prediction": self._xyz_dict(tuple(float(v) for v in predicted)),
+                    "covariance_diag": self._covariance_dict(),
+                }
+                return None
 
             self._candidate_key = "kf_no_association"
             self._candidate_count = len(valid)
@@ -716,11 +736,13 @@ class OakYoloTargetNode(Node):
                 "association_distance_m": association_distance,
                 "association_gate_m": association_gate,
                 "age_since_update_s": age_since_update,
+                "missed_frames": self._kalman_missed_frames,
+                "strict_measurement_required": strict_measurement_required,
                 "valid_count": len(valid),
                 "prediction": self._xyz_dict(tuple(float(v) for v in predicted)),
                 "covariance_diag": self._covariance_dict(),
             }
-            if bool(self.get_parameter("kalman_publish_prediction_without_measurement").value):
+            if (not strict_measurement_required) and bool(self.get_parameter("kalman_publish_prediction_without_measurement").value):
                 pseudo = min(valid, key=lambda c: (c.depth_m, -c.confidence))
                 pseudo.sensor_point_xyz = pseudo.point_xyz
                 pseudo.sensor_depth_m = pseudo.depth_m
@@ -758,22 +780,55 @@ class OakYoloTargetNode(Node):
 
     def _handle_no_kalman_measurement(self, now: float) -> Optional[PersonCandidate]:
         reset_timeout = float(self.get_parameter("kalman_reset_timeout_s").value)
+        missed_limit = max(1, int(self.get_parameter("kalman_missed_frames_to_reset").value))
+        strict_measurement_required = bool(self.get_parameter("kalman_strict_measurement_required").value)
         last_update = self.kalman_filter.last_update_time
         age_since_update = math.inf if last_update is None else max(0.0, now - last_update)
-        if self.kalman_filter.initialized and age_since_update >= reset_timeout:
+
+        self._kalman_missed_frames += 1
+        should_reset = (
+            self.kalman_filter.initialized
+            and (age_since_update >= reset_timeout or self._kalman_missed_frames >= missed_limit)
+        )
+        if should_reset:
             self.kalman_filter.reset()
+
+        # Do not publish prediction-only targets while strict mode is enabled.
+        # This prevents the Go2-side planner from continuing to generate paths
+        # from stale KF estimates after the person is lost by YOLO/depth.
         self.locked_last_point = None
         self.locked_last_seen_time = None
         self._candidate_key = None
         self._candidate_count = 0
         self._last_kalman_debug = {
             "enabled": True,
-            "mode": "no_measurement",
+            "mode": "no_measurement_reset" if should_reset else "no_measurement_hold_no_publish",
             "age_since_update_s": age_since_update,
             "reset_timeout_s": reset_timeout,
+            "missed_frames": self._kalman_missed_frames,
+            "missed_frames_to_reset": missed_limit,
+            "strict_measurement_required": strict_measurement_required,
             "initialized": self.kalman_filter.initialized,
             "covariance_diag": self._covariance_dict(),
         }
+
+        if (not strict_measurement_required) and bool(self.get_parameter("kalman_publish_prediction_without_measurement").value):
+            if self.kalman_filter.initialized and self.kalman_filter.x is not None:
+                predicted = self.kalman_filter.x.copy()
+                return PersonCandidate(
+                    bbox_xyxy=(0, 0, 0, 0),
+                    confidence=0.0,
+                    class_id=int(self.get_parameter("person_class_id").value),
+                    class_name="person",
+                    track_id=None,
+                    depth_m=float(predicted[0]),
+                    point_xyz=tuple(float(v) for v in predicted.reshape(3)),
+                    center_uv_rgb=(0.0, 0.0),
+                    center_uv_depth=(0.0, 0.0),
+                    sensor_point_xyz=None,
+                    sensor_depth_m=None,
+                    association_distance_m=None,
+                )
         return None
 
     def _finalize_kalman_target(
@@ -785,6 +840,7 @@ class OakYoloTargetNode(Node):
         association_distance: float,
         valid_count: int,
     ) -> PersonCandidate:
+        self._kalman_missed_frames = 0
         raw_point = chosen.point_xyz
         raw_depth = chosen.depth_m
         filtered_tuple = tuple(float(v) for v in filtered.reshape(3))
@@ -832,6 +888,7 @@ class OakYoloTargetNode(Node):
         self._candidate_count = 0
         if bool(self.get_parameter("use_kalman_filter").value):
             self.kalman_filter.reset()
+            self._kalman_missed_frames = 0
             self._last_kalman_debug = {"enabled": True, "mode": "reset_by_clear_lock"}
 
     # --------------------------------------------------------------- publish

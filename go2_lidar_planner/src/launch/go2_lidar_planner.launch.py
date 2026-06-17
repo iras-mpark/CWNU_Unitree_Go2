@@ -55,6 +55,7 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacle_z_max_m', default_value='1.20'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),
+        DeclareLaunchArgument('clear_target_on_status_lost', default_value='true'),
         DeclareLaunchArgument('max_forward_speed_mps', default_value='3.0'),
         DeclareLaunchArgument('max_lateral_speed_mps', default_value='0.5'),
         DeclareLaunchArgument('distance_pid_kp', default_value='0.70'),
@@ -146,6 +147,8 @@ def generate_launch_description():
         parameters=[{
             'path_frame': LaunchConfiguration('target_frame'),
             'target_topic': LaunchConfiguration('target_topic'),
+            'target_status_topic': LaunchConfiguration('target_status_topic'),
+            'clear_target_on_status_lost': ParameterValue(LaunchConfiguration('clear_target_on_status_lost'), value_type=bool),
             'occupancy_input_topic': '/utlidar/accumulated_obstacle_grid',
             'publish_rate_hz': ParameterValue(LaunchConfiguration('planner_publish_rate_hz'), value_type=float),
             'follow_distance_m': ParameterValue(LaunchConfiguration('follow_distance_m'), value_type=float),
@@ -217,6 +220,7 @@ def generate_launch_description():
             'follower_status_topic': LaunchConfiguration('follower_status_topic'),
             'safety_scan_topic': LaunchConfiguration('safety_scan_topic'),
             'require_target_status': ParameterValue(LaunchConfiguration('require_target_status'), value_type=bool),
+            'clear_target_on_status_lost': ParameterValue(LaunchConfiguration('clear_target_on_status_lost'), value_type=bool),
             'cmd_frame': LaunchConfiguration('target_frame'),
         }],
     )

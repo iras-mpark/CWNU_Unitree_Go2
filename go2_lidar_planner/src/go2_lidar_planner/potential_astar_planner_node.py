@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import heapq
+import json
 import math
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -15,6 +16,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import String
 from sensor_msgs_py import point_cloud2
 
 Cell = Tuple[int, int]
@@ -30,6 +32,8 @@ class PotentialAStarPlannerNode(Node):
         self.declare_parameter("occupancy_input_topic", "/utlidar/accumulated_obstacle_grid")
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("target_topic", "/local_goal_point")
+        self.declare_parameter("target_status_topic", "/target/status")
+        self.declare_parameter("clear_target_on_status_lost", True)
         self.declare_parameter("path_topic", "/path")
         self.declare_parameter("goal_waypoint_topic", "/goal_waypoint")
         self.declare_parameter("goal_target_topic", "/goal_target")
@@ -74,9 +78,13 @@ class PotentialAStarPlannerNode(Node):
         self._last_emergency_warn_time = self.get_clock().now() - Duration(seconds=10.0)
         self.latest_target: Optional[PointStamped] = None
         self.last_target_time: Optional[Time] = None
+        self.target_status_tracked: Optional[bool] = None
+        self.target_status_time: Optional[Time] = None
+        self.target_lost_reason: str = ""
 
         self.create_subscription(OccupancyGrid, self.occupancy_input_topic, self._occupancy_cb, 5)
         self.create_subscription(PointStamped, self.target_topic, self._target_cb, 5)
+        self.create_subscription(String, str(self.get_parameter("target_status_topic").value), self._target_status_cb, 10)
         self.path_pub = self.create_publisher(Path, str(self.get_parameter("path_topic").value), 10)
         self.waypoint_pub = self.create_publisher(PointStamped, str(self.get_parameter("goal_waypoint_topic").value), 5)
         self.target_pub = self.create_publisher(PointStamped, str(self.get_parameter("goal_target_topic").value), 5)
@@ -127,6 +135,23 @@ class PotentialAStarPlannerNode(Node):
         self.latest_target = msg
         self.last_target_time = self.get_clock().now()
 
+    def _target_status_cb(self, msg: String) -> None:
+        self.target_status_time = self.get_clock().now()
+        try:
+            payload = json.loads(msg.data)
+            tracked = bool(payload.get("tracked", False))
+            self.target_status_tracked = tracked
+            if not tracked and bool(self.get_parameter("clear_target_on_status_lost").value):
+                self.latest_target = None
+                self.last_target_time = None
+                self.target_lost_reason = str(payload.get("reason", "target_status_tracked_false"))
+        except Exception as exc:
+            self.target_status_tracked = False
+            if bool(self.get_parameter("clear_target_on_status_lost").value):
+                self.latest_target = None
+                self.last_target_time = None
+                self.target_lost_reason = f"target_status_parse_error: {exc}"
+
     def _timer_cb(self) -> None:
         now = self.get_clock().now()
         inflated, potential = self._build_maps()
@@ -163,6 +188,9 @@ class PotentialAStarPlannerNode(Node):
 
     # ---------------------------------------------------------------- target / waypoint
     def _fresh_target_xy(self, now: Time) -> Optional[Point2]:
+        if bool(self.get_parameter("clear_target_on_status_lost").value):
+            if self.target_status_time is not None and self.target_status_tracked is False:
+                return None
         if self.latest_target is None or self.last_target_time is None:
             return None
         timeout = float(self.get_parameter("target_stale_timeout_s").value)

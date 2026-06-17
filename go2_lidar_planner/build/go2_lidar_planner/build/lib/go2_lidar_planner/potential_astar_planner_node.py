@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import heapq
+import json
 import math
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -15,6 +16,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import String
 from sensor_msgs_py import point_cloud2
 
 Cell = Tuple[int, int]
@@ -30,6 +32,8 @@ class PotentialAStarPlannerNode(Node):
         self.declare_parameter("occupancy_input_topic", "/utlidar/accumulated_obstacle_grid")
         self.declare_parameter("occupied_threshold", 50)
         self.declare_parameter("target_topic", "/local_goal_point")
+        self.declare_parameter("target_status_topic", "/target/status")
+        self.declare_parameter("clear_target_on_status_lost", True)
         self.declare_parameter("path_topic", "/path")
         self.declare_parameter("goal_waypoint_topic", "/goal_waypoint")
         self.declare_parameter("goal_target_topic", "/goal_target")
@@ -43,15 +47,11 @@ class PotentialAStarPlannerNode(Node):
         self.declare_parameter("max_path_length_m", 4.0)
         self.declare_parameter("path_resolution_m", 0.20)
         self.declare_parameter("grid_resolution_m", 0.12)
-        self.declare_parameter("grid_x_min_m", -1.0)
-        self.declare_parameter("grid_x_max_m", 6.0)
-        self.declare_parameter("grid_y_min_m", -3.5)
-        self.declare_parameter("grid_y_max_m", 3.5)
+        self.declare_parameter("grid_x_min_m", 0.0)
+        self.declare_parameter("grid_x_max_m", 3.0)
+        self.declare_parameter("grid_y_min_m", -1.5)
+        self.declare_parameter("grid_y_max_m", 1.5)
 
-        self.declare_parameter("obstacle_z_min_m", 0.05)
-        self.declare_parameter("obstacle_z_max_m", 1.20)
-        self.declare_parameter("min_obstacle_range_m", 0.05)
-        self.declare_parameter("max_obstacle_range_m", 6.0)
         self.declare_parameter("safety_radius_m", 0.45)
         self.declare_parameter("potential_radius_m", 0.95)
         self.declare_parameter("potential_weight", 4.0)
@@ -78,9 +78,13 @@ class PotentialAStarPlannerNode(Node):
         self._last_emergency_warn_time = self.get_clock().now() - Duration(seconds=10.0)
         self.latest_target: Optional[PointStamped] = None
         self.last_target_time: Optional[Time] = None
+        self.target_status_tracked: Optional[bool] = None
+        self.target_status_time: Optional[Time] = None
+        self.target_lost_reason: str = ""
 
         self.create_subscription(OccupancyGrid, self.occupancy_input_topic, self._occupancy_cb, 5)
         self.create_subscription(PointStamped, self.target_topic, self._target_cb, 5)
+        self.create_subscription(String, str(self.get_parameter("target_status_topic").value), self._target_status_cb, 10)
         self.path_pub = self.create_publisher(Path, str(self.get_parameter("path_topic").value), 10)
         self.waypoint_pub = self.create_publisher(PointStamped, str(self.get_parameter("goal_waypoint_topic").value), 5)
         self.target_pub = self.create_publisher(PointStamped, str(self.get_parameter("goal_target_topic").value), 5)
@@ -89,12 +93,9 @@ class PotentialAStarPlannerNode(Node):
         self.potential_pub = self.create_publisher(OccupancyGrid, str(self.get_parameter("potential_grid_topic").value), 5)
         rate = max(1.0, float(self.get_parameter("publish_rate_hz").value))
         self.create_timer(1.0 / rate, self._timer_cb)
-        obstacle_z_min = float(self.get_parameter("obstacle_z_min_m").value)
-        obstacle_z_max = float(self.get_parameter("obstacle_z_max_m").value)
         self.get_logger().info(
             f"Potential A* planner ready: ogm={self.occupancy_input_topic}, target={self.target_topic}, "
-            f"grid={self.width}x{self.height}@{self.resolution:.2f}m, "
-            f"obstacle_z=[{obstacle_z_min:.2f}, {obstacle_z_max:.2f}]m"
+            f"grid={self.width}x{self.height}@{self.resolution:.2f}m"
         )
 
     # ---------------------------------------------------------------- callbacks
@@ -134,6 +135,23 @@ class PotentialAStarPlannerNode(Node):
         self.latest_target = msg
         self.last_target_time = self.get_clock().now()
 
+    def _target_status_cb(self, msg: String) -> None:
+        self.target_status_time = self.get_clock().now()
+        try:
+            payload = json.loads(msg.data)
+            tracked = bool(payload.get("tracked", False))
+            self.target_status_tracked = tracked
+            if not tracked and bool(self.get_parameter("clear_target_on_status_lost").value):
+                self.latest_target = None
+                self.last_target_time = None
+                self.target_lost_reason = str(payload.get("reason", "target_status_tracked_false"))
+        except Exception as exc:
+            self.target_status_tracked = False
+            if bool(self.get_parameter("clear_target_on_status_lost").value):
+                self.latest_target = None
+                self.last_target_time = None
+                self.target_lost_reason = f"target_status_parse_error: {exc}"
+
     def _timer_cb(self) -> None:
         now = self.get_clock().now()
         inflated, potential = self._build_maps()
@@ -160,7 +178,7 @@ class PotentialAStarPlannerNode(Node):
             self._publish_point(self.waypoint_pub, (0.0, 0.0), now)
             return
 
-        adjusted = self._adjust_waypoint_to_free_boundary(desired, inflated, potential)
+        adjusted = self._adjust_waypoint_to_free_boundary(desired, inflated, potential, target_xy=target_xy)
         self._publish_point(self.waypoint_pub, adjusted, now)
         path_points = self._astar((0.0, 0.0), adjusted, inflated, potential)
         if not path_points:
@@ -170,6 +188,9 @@ class PotentialAStarPlannerNode(Node):
 
     # ---------------------------------------------------------------- target / waypoint
     def _fresh_target_xy(self, now: Time) -> Optional[Point2]:
+        if bool(self.get_parameter("clear_target_on_status_lost").value):
+            if self.target_status_time is not None and self.target_status_tracked is False:
+                return None
         if self.latest_target is None or self.last_target_time is None:
             return None
         timeout = float(self.get_parameter("target_stale_timeout_s").value)
@@ -244,7 +265,11 @@ class PotentialAStarPlannerNode(Node):
                     yield (cx + dx, cy + dy), math.sqrt(d2)
 
     def _adjust_waypoint_to_free_boundary(
-        self, waypoint: Point2, inflated: Set[Cell], potential: Dict[Cell, float]
+        self,
+        waypoint: Point2,
+        inflated: Set[Cell],
+        potential: Dict[Cell, float],
+        target_xy: Optional[Point2] = None,
     ) -> Point2:
         start = self._world_to_cell(*waypoint)
         if start is None:
@@ -255,6 +280,11 @@ class PotentialAStarPlannerNode(Node):
 
         def acceptable(c: Cell) -> bool:
             return self._cell_in_bounds(c) and c not in inflated and potential.get(c, 0.0) <= threshold
+
+        if target_xy is not None:
+            boundary_waypoint = self._target_component_boundary_waypoint(target_xy, inflated, potential, threshold)
+            if boundary_waypoint is not None:
+                return boundary_waypoint
 
         if acceptable(start):
             return waypoint
@@ -274,6 +304,55 @@ class PotentialAStarPlannerNode(Node):
                 visited.add(nb)
                 heapq.heappush(queue, (dist_cells + 1, nb))
         return waypoint
+
+    def _target_component_boundary_waypoint(
+        self, target_xy: Point2, inflated: Set[Cell], potential: Dict[Cell, float], threshold: float
+    ) -> Optional[Point2]:
+        target_cell = self._world_to_cell(*target_xy)
+        if target_cell is None or target_cell not in inflated:
+            return None
+
+        component = self._connected_component(target_cell, inflated)
+        if not component:
+            return None
+
+        tx, ty = target_xy
+        target_dist = math.hypot(tx, ty)
+        if target_dist < 1e-6:
+            return None
+
+        step = max(self.resolution * 0.5, 0.01)
+        samples = max(1, int(math.ceil(target_dist / step)))
+        last_acceptable: Optional[Cell] = None
+
+        for i in range(samples + 1):
+            scale = min(1.0, (i * step) / target_dist)
+            c = self._world_to_cell(tx * scale, ty * scale)
+            if c is None:
+                continue
+            if c in component:
+                return self._cell_to_world(last_acceptable) if last_acceptable is not None else None
+            if c in inflated:
+                return None
+            if potential.get(c, 0.0) <= threshold:
+                last_acceptable = c
+
+        return None
+
+    def _connected_component(self, start: Cell, cells: Set[Cell]) -> Set[Cell]:
+        if start not in cells:
+            return set()
+        component: Set[Cell] = set()
+        queue = [start]
+        while queue:
+            c = queue.pop()
+            if c in component:
+                continue
+            component.add(c)
+            for nb in self._neighbors8(c):
+                if nb in cells and nb not in component:
+                    queue.append(nb)
+        return component
 
     # ---------------------------------------------------------------- A*
     def _astar(

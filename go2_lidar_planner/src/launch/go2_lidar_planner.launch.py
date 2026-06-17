@@ -22,7 +22,7 @@ def generate_launch_description():
 
         # LiDAR mounting correction. Defaults preserve the original package's pitch.
         DeclareLaunchArgument('lidar_roll', default_value='0.0'),
-        DeclareLaunchArgument('lidar_pitch', default_value='2.8782025850555556'),
+        DeclareLaunchArgument('lidar_pitch', default_value='2.95'),
         DeclareLaunchArgument('lidar_yaw', default_value='0.0'),
         DeclareLaunchArgument('lidar_x', default_value='0.0'),
         DeclareLaunchArgument('lidar_y', default_value='0.0'),
@@ -34,7 +34,7 @@ def generate_launch_description():
         DeclareLaunchArgument('accumulator_publish_rate_hz', default_value='30.0'),
         DeclareLaunchArgument('planner_publish_rate_hz', default_value='30.0'),
         DeclareLaunchArgument('ogm_min_points_per_cell', default_value='2'),
-        DeclareLaunchArgument('min_obstacle_range_m', default_value='0.05'),
+        DeclareLaunchArgument('min_obstacle_range_m', default_value='0.25'),
 
         # Planner / follower.
         DeclareLaunchArgument('follow_distance_m', default_value='1.0'),
@@ -51,7 +51,7 @@ def generate_launch_description():
         # +x uses obstacle_z_min_m. -x uses obstacle_z_min_negative_x_m so
         # rear/body-side LiDAR returns can be filtered independently.
         DeclareLaunchArgument('obstacle_z_min_m', default_value='0.1'),
-        DeclareLaunchArgument('obstacle_z_min_negative_x_m', default_value='0.1'),
+        DeclareLaunchArgument('obstacle_z_min_negative_x_m', default_value='-0.1'),
         DeclareLaunchArgument('obstacle_z_max_m', default_value='1.20'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),

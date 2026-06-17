@@ -22,7 +22,7 @@ def generate_launch_description():
 
         # LiDAR mounting correction. Defaults preserve the original package's pitch.
         DeclareLaunchArgument('lidar_roll', default_value='0.0'),
-        DeclareLaunchArgument('lidar_pitch', default_value='2.95'),
+        DeclareLaunchArgument('lidar_pitch', default_value='2.87'),
         DeclareLaunchArgument('lidar_yaw', default_value='0.0'),
         DeclareLaunchArgument('lidar_x', default_value='0.0'),
         DeclareLaunchArgument('lidar_y', default_value='0.0'),

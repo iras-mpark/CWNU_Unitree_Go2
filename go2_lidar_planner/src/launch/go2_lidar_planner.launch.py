@@ -29,12 +29,12 @@ def generate_launch_description():
         DeclareLaunchArgument('lidar_z', default_value='0.0'),
 
         # LiDAR moving-window accumulation.
-        DeclareLaunchArgument('history_duration', default_value='0.3'),
+        DeclareLaunchArgument('history_duration', default_value='0.6'),
         DeclareLaunchArgument('max_clouds', default_value='36'),
         DeclareLaunchArgument('accumulator_publish_rate_hz', default_value='30.0'),
         DeclareLaunchArgument('planner_publish_rate_hz', default_value='30.0'),
         DeclareLaunchArgument('ogm_min_points_per_cell', default_value='2'),
-        DeclareLaunchArgument('min_obstacle_range_m', default_value='0.25'),
+        DeclareLaunchArgument('min_obstacle_range_m', default_value='-0.01'),
 
         # Planner / follower.
         DeclareLaunchArgument('follow_distance_m', default_value='1.0'),
@@ -43,15 +43,15 @@ def generate_launch_description():
         DeclareLaunchArgument('grid_x_max_m', default_value='4.0'),
         DeclareLaunchArgument('grid_y_min_m', default_value='-2.0'),
         DeclareLaunchArgument('grid_y_max_m', default_value='2.0'),
-        DeclareLaunchArgument('safety_radius_m', default_value='0.3'),
+        DeclareLaunchArgument('safety_radius_m', default_value='0.2'),
         DeclareLaunchArgument('potential_radius_m', default_value='0.95'),
         DeclareLaunchArgument('potential_weight', default_value='4.0'),
-        DeclareLaunchArgument('waypoint_potential_threshold', default_value='0.3'),
+        DeclareLaunchArgument('waypoint_potential_threshold', default_value='0.2'),
         # Only points inside this height band are treated as obstacles.
         # +x uses obstacle_z_min_m. -x uses obstacle_z_min_negative_x_m so
         # rear/body-side LiDAR returns can be filtered independently.
         DeclareLaunchArgument('obstacle_z_min_m', default_value='0.1'),
-        DeclareLaunchArgument('obstacle_z_min_negative_x_m', default_value='-0.1'),
+        DeclareLaunchArgument('obstacle_z_min_negative_x_m', default_value='0.05'),
         DeclareLaunchArgument('obstacle_z_max_m', default_value='1.20'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),

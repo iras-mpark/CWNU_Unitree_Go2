@@ -71,6 +71,7 @@ class Go2PathFollowerNode(Node):
         self.declare_parameter("high_speed_safety_enabled", True)
         self.declare_parameter("safety_scan_timeout_s", 0.15)
         self.declare_parameter("safety_obstacle_z_min_m", 0.10)
+        self.declare_parameter("safety_obstacle_z_min_negative_x_m", 0.10)
         self.declare_parameter("safety_obstacle_z_max_m", 1.20)
         self.declare_parameter("robot_collision_radius_m", 0.32)
         self.declare_parameter("obstacle_stop_margin_m", 0.45)
@@ -163,9 +164,9 @@ class Go2PathFollowerNode(Node):
             self.status_tracked = False
 
     def _safety_scan_cb(self, cloud: PointCloud2) -> None:
-        z_min = float(self.get_parameter("safety_obstacle_z_min_m").value)
-        z_max = float(self.get_parameter("safety_obstacle_z_max_m").value)
-        z_min, z_max = min(z_min, z_max), max(z_min, z_max)
+        z_min_pos = float(self.get_parameter("safety_obstacle_z_min_m").value)
+        z_min_neg = float(self.get_parameter("safety_obstacle_z_min_negative_x_m").value)
+        z_max_param = float(self.get_parameter("safety_obstacle_z_max_m").value)
         obstacles = []
         for x, y, z in point_cloud2.read_points(
             cloud, field_names=("x", "y", "z"), skip_nans=True
@@ -173,7 +174,9 @@ class Go2PathFollowerNode(Node):
             x = float(x)
             y = float(y)
             z = float(z)
-            if z_min <= z <= z_max and math.isfinite(x) and math.isfinite(y):
+            z_min = z_min_pos if x >= 0.0 else z_min_neg
+            z_low, z_high = min(z_min, z_max_param), max(z_min, z_max_param)
+            if z_low <= z <= z_high and math.isfinite(x) and math.isfinite(y):
                 obstacles.append((x, y))
         self.safety_obstacles_xy = obstacles
         self.safety_scan_time = self.get_clock().now()

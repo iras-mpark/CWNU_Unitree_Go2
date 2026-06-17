@@ -71,6 +71,7 @@ class Go2PathFollowerNode(Node):
         self.declare_parameter("high_speed_safety_enabled", True)
         self.declare_parameter("safety_scan_timeout_s", 0.15)
         self.declare_parameter("safety_obstacle_z_min_m", 0.10)
+        self.declare_parameter("safety_obstacle_z_min_negative_x_m", 0.10)
         self.declare_parameter("safety_obstacle_z_max_m", 1.20)
         self.declare_parameter("robot_collision_radius_m", 0.32)
         self.declare_parameter("obstacle_stop_margin_m", 0.45)
@@ -96,7 +97,7 @@ class Go2PathFollowerNode(Node):
 
         self.path: Optional[Path] = None
         self.path_time: Optional[Time] = None
-        self.target_xy: Optional[Tuple[float, float]] = None
+        self.target_xyz: Optional[Tuple[float, float, float]] = None
         self.target_time: Optional[Time] = None
         self.status_tracked: bool = False
         self.status_time: Optional[Time] = None
@@ -151,7 +152,7 @@ class Go2PathFollowerNode(Node):
         self.path_time = self.get_clock().now()
 
     def _target_cb(self, msg: PointStamped) -> None:
-        self.target_xy = (float(msg.point.x), float(msg.point.y))
+        self.target_xyz = (float(msg.point.x), float(msg.point.y), float(msg.point.z))
         self.target_time = self.get_clock().now()
 
     def _status_cb(self, msg: String) -> None:
@@ -163,8 +164,9 @@ class Go2PathFollowerNode(Node):
             self.status_tracked = False
 
     def _safety_scan_cb(self, cloud: PointCloud2) -> None:
-        z_min = float(self.get_parameter("safety_obstacle_z_min_m").value)
-        z_max = float(self.get_parameter("safety_obstacle_z_max_m").value)
+        z_min_pos = float(self.get_parameter("safety_obstacle_z_min_m").value)
+        z_min_neg = float(self.get_parameter("safety_obstacle_z_min_negative_x_m").value)
+        z_max_param = float(self.get_parameter("safety_obstacle_z_max_m").value)
         obstacles = []
         for x, y, z in point_cloud2.read_points(
             cloud, field_names=("x", "y", "z"), skip_nans=True
@@ -172,7 +174,9 @@ class Go2PathFollowerNode(Node):
             x = float(x)
             y = float(y)
             z = float(z)
-            if z_min <= z <= z_max and math.isfinite(x) and math.isfinite(y):
+            z_min = z_min_pos if x >= 0.0 else z_min_neg
+            z_low, z_high = min(z_min, z_max_param), max(z_min, z_max_param)
+            if z_low <= z <= z_high and math.isfinite(x) and math.isfinite(y):
                 obstacles.append((x, y))
         self.safety_obstacles_xy = obstacles
         self.safety_scan_time = self.get_clock().now()
@@ -208,7 +212,7 @@ class Go2PathFollowerNode(Node):
         path_timeout = Duration(seconds=float(self.get_parameter("path_stale_timeout_s").value))
         status_timeout = Duration(seconds=float(self.get_parameter("status_stale_timeout_s").value))
 
-        if self.target_time is None or self.target_xy is None:
+        if self.target_time is None or self.target_xyz is None:
             return False, "no target point received"
         if now - self.target_time > target_timeout:
             return False, "target point stale"
@@ -242,10 +246,11 @@ class Go2PathFollowerNode(Node):
         cmd.header.frame_id = str(self.get_parameter("cmd_frame").value)
 
         path = self.path
-        target_xy = self.target_xy
-        if path is None or target_xy is None:
+        target_xyz = self.target_xyz
+        if path is None or target_xyz is None:
             return cmd
 
+        target_xy = (target_xyz[0], target_xyz[1])
         target_distance = math.hypot(target_xy[0], target_xy[1])
         follow_distance = float(self.get_parameter("follow_distance_m").value)
         heading_error = math.atan2(target_xy[1], target_xy[0])
@@ -547,7 +552,15 @@ class Go2PathFollowerNode(Node):
             "unitree_api_available": HAS_UNITREE_API,
             "api_control_enabled": bool(self.get_parameter("api_control_enabled").value),
             "request_publisher_ready": self.req_pub is not None,
-            "target_xy": None if self.target_xy is None else {"x": self.target_xy[0], "y": self.target_xy[1]},
+            "target_xy": None if self.target_xyz is None else {
+                "x": self.target_xyz[0],
+                "y": self.target_xyz[1],
+            },
+            "target_xyz": None if self.target_xyz is None else {
+                "x": self.target_xyz[0],
+                "y": self.target_xyz[1],
+                "z": self.target_xyz[2],
+            },
             "path_len": 0 if self.path is None else len(self.path.poses),
             "target_age_s": self._age_s(now, self.target_time),
             "path_age_s": self._age_s(now, self.path_time),

@@ -48,8 +48,10 @@ def generate_launch_description():
         DeclareLaunchArgument('potential_weight', default_value='4.0'),
         DeclareLaunchArgument('waypoint_potential_threshold', default_value='0.3'),
         # Only points inside this height band are treated as obstacles.
-        # The lower bound intentionally removes floor/ground returns from the 3D LiDAR.
+        # +x uses obstacle_z_min_m. -x uses obstacle_z_min_negative_x_m so
+        # rear/body-side LiDAR returns can be filtered independently.
         DeclareLaunchArgument('obstacle_z_min_m', default_value='0.1'),
+        DeclareLaunchArgument('obstacle_z_min_negative_x_m', default_value='0.1'),
         DeclareLaunchArgument('obstacle_z_max_m', default_value='1.20'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),
@@ -128,6 +130,7 @@ def generate_launch_description():
             'grid_y_min_m': ParameterValue(LaunchConfiguration('grid_y_min_m'), value_type=float),
             'grid_y_max_m': ParameterValue(LaunchConfiguration('grid_y_max_m'), value_type=float),
             'obstacle_z_min_m': ParameterValue(LaunchConfiguration('obstacle_z_min_m'), value_type=float),
+            'obstacle_z_min_negative_x_m': ParameterValue(LaunchConfiguration('obstacle_z_min_negative_x_m'), value_type=float),
             'obstacle_z_max_m': ParameterValue(LaunchConfiguration('obstacle_z_max_m'), value_type=float),
             'min_obstacle_range_m': ParameterValue(LaunchConfiguration('min_obstacle_range_m'), value_type=float),
             'min_points_per_cell': ParameterValue(LaunchConfiguration('ogm_min_points_per_cell'), value_type=int),
@@ -185,6 +188,7 @@ def generate_launch_description():
             'obstacle_safety_enabled': ParameterValue(LaunchConfiguration('obstacle_safety_enabled'), value_type=bool),
             'safety_scan_timeout_s': ParameterValue(LaunchConfiguration('safety_scan_timeout_s'), value_type=float),
             'safety_obstacle_z_min_m': ParameterValue(LaunchConfiguration('obstacle_z_min_m'), value_type=float),
+            'safety_obstacle_z_min_negative_x_m': ParameterValue(LaunchConfiguration('obstacle_z_min_negative_x_m'), value_type=float),
             'safety_obstacle_z_max_m': ParameterValue(LaunchConfiguration('obstacle_z_max_m'), value_type=float),
             'min_obstacle_range_m': ParameterValue(LaunchConfiguration('min_obstacle_range_m'), value_type=float),
             'robot_collision_radius_m': ParameterValue(LaunchConfiguration('robot_collision_radius_m'), value_type=float),

@@ -64,7 +64,6 @@ class PotentialAStarPlannerNode(Node):
         self.declare_parameter("prefer_forward_motion", True)
         # Keep this below the normal inflated-map avoidance distance. A larger
         # hard stop prevents the holonomic planner from producing a side-step.
-        self.declare_parameter("emergency_stop_distance_m", 0.18)
 
         self.frame = str(self.get_parameter("path_frame").value)
         self.occupancy_input_topic = str(self.get_parameter("occupancy_input_topic").value)
@@ -79,7 +78,6 @@ class PotentialAStarPlannerNode(Node):
 
         self.obstacles_xy: List[Point2] = []
         self.obstacle_cells: Set[Cell] = set()
-        self._last_emergency_warn_time = self.get_clock().now() - Duration(seconds=10.0)
         self.latest_target: Optional[PointStamped] = None
         self.last_target_time: Optional[Time] = None
         self.target_status_tracked: Optional[bool] = None
@@ -188,14 +186,6 @@ class PotentialAStarPlannerNode(Node):
         if self.target_pub is not None:
             self._publish_point(self.target_pub, target_xy, now)
 
-        if self._front_obstacle_too_close():
-            if now - self._last_emergency_warn_time > Duration(seconds=1.0):
-                self._last_emergency_warn_time = now
-                self.get_logger().warn("Emergency stop: obstacle too close in front.")
-            self.path_pub.publish(self._path_msg([(0.0, 0.0)], now))
-            self._publish_point(self.waypoint_pub, (0.0, 0.0), now)
-            return
-
         desired = self._desired_waypoint(target_xy)
         if desired is None:
             self.path_pub.publish(self._path_msg([(0.0, 0.0)], now))
@@ -238,15 +228,6 @@ class PotentialAStarPlannerNode(Node):
         gx = min(max(gx, self.x_min + self.resolution), self.x_max - self.resolution)
         gy = min(max(gy, self.y_min + self.resolution), self.y_max - self.resolution)
         return (gx, gy)
-
-    def _front_obstacle_too_close(self) -> bool:
-        threshold = float(self.get_parameter("emergency_stop_distance_m").value)
-        if threshold <= 0:
-            return False
-        for x, y in self.obstacles_xy:
-            if 0.0 < x < threshold and abs(y) < 0.35:
-                return True
-        return False
 
     # ---------------------------------------------------------------- map building
     def _build_maps(self) -> Tuple[Set[Cell], Dict[Cell, float]]:

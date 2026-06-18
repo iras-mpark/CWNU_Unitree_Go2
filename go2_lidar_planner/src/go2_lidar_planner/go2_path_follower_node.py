@@ -41,6 +41,7 @@ class Go2PathFollowerNode(Node):
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("sport_request_topic", "/api/sport/request")
         self.declare_parameter("follower_status_topic", "/go2_follower/status")
+        self.declare_parameter("publish_follower_status", True)
         self.declare_parameter("safety_scan_topic", "/utlidar/transformed_cloud")
         self.declare_parameter("cmd_frame", "base_link")
         self.declare_parameter("publish_rate_hz", 30.0)
@@ -130,7 +131,11 @@ class Go2PathFollowerNode(Node):
             10,
         )
         self.cmd_pub = self.create_publisher(TwistStamped, str(self.get_parameter("cmd_vel_topic").value), 10)
-        self.status_pub = self.create_publisher(String, str(self.get_parameter("follower_status_topic").value), 10)
+        self.status_pub = (
+            self.create_publisher(String, str(self.get_parameter("follower_status_topic").value), 10)
+            if bool(self.get_parameter("publish_follower_status").value)
+            else None
+        )
         self.req_pub = None
         if HAS_UNITREE_API:
             self.req_pub = self.create_publisher(Request, str(self.get_parameter("sport_request_topic").value), 10)
@@ -601,7 +606,8 @@ class Go2PathFollowerNode(Node):
                 "ki": float(self.get_parameter("distance_pid_ki").value),
                 "kd": float(self.get_parameter("distance_pid_kd").value),
             }
-        self.status_pub.publish(String(data=json.dumps(payload)))
+        if self.status_pub is not None:
+            self.status_pub.publish(String(data=json.dumps(payload)))
 
     def _age_s(self, now: Time, t: Optional[Time]) -> Optional[float]:
         if t is None:

@@ -40,6 +40,10 @@ class PotentialAStarPlannerNode(Node):
         self.declare_parameter("obstacle_cloud_topic", "/local_obstacles")
         self.declare_parameter("occupancy_grid_topic", "/local_obstacle_grid")
         self.declare_parameter("potential_grid_topic", "/local_potential_grid")
+        self.declare_parameter("publish_goal_target", False)
+        self.declare_parameter("publish_local_obstacle_cloud", False)
+        self.declare_parameter("publish_local_obstacle_grid", False)
+        self.declare_parameter("publish_local_potential_grid", True)
         self.declare_parameter("publish_rate_hz", 10.0)
 
         self.declare_parameter("follow_distance_m", 2.0)
@@ -87,10 +91,26 @@ class PotentialAStarPlannerNode(Node):
         self.create_subscription(String, str(self.get_parameter("target_status_topic").value), self._target_status_cb, 10)
         self.path_pub = self.create_publisher(Path, str(self.get_parameter("path_topic").value), 10)
         self.waypoint_pub = self.create_publisher(PointStamped, str(self.get_parameter("goal_waypoint_topic").value), 5)
-        self.target_pub = self.create_publisher(PointStamped, str(self.get_parameter("goal_target_topic").value), 5)
-        self.obstacle_pub = self.create_publisher(PointCloud2, str(self.get_parameter("obstacle_cloud_topic").value), 5)
-        self.occupancy_pub = self.create_publisher(OccupancyGrid, str(self.get_parameter("occupancy_grid_topic").value), 5)
-        self.potential_pub = self.create_publisher(OccupancyGrid, str(self.get_parameter("potential_grid_topic").value), 5)
+        self.target_pub = (
+            self.create_publisher(PointStamped, str(self.get_parameter("goal_target_topic").value), 5)
+            if bool(self.get_parameter("publish_goal_target").value)
+            else None
+        )
+        self.obstacle_pub = (
+            self.create_publisher(PointCloud2, str(self.get_parameter("obstacle_cloud_topic").value), 5)
+            if bool(self.get_parameter("publish_local_obstacle_cloud").value)
+            else None
+        )
+        self.occupancy_pub = (
+            self.create_publisher(OccupancyGrid, str(self.get_parameter("occupancy_grid_topic").value), 5)
+            if bool(self.get_parameter("publish_local_obstacle_grid").value)
+            else None
+        )
+        self.potential_pub = (
+            self.create_publisher(OccupancyGrid, str(self.get_parameter("potential_grid_topic").value), 5)
+            if bool(self.get_parameter("publish_local_potential_grid").value)
+            else None
+        )
         rate = max(1.0, float(self.get_parameter("publish_rate_hz").value))
         self.create_timer(1.0 / rate, self._timer_cb)
         self.get_logger().info(
@@ -123,12 +143,13 @@ class PotentialAStarPlannerNode(Node):
             pts3.append((point[0], point[1], 0.0))
         self.obstacle_cells = cells
         self.obstacles_xy = pts2
-        header = grid.header
-        header.frame_id = self.frame
-        out = point_cloud2.create_cloud_xyz32(header, pts3) if pts3 else PointCloud2()
-        out.header = header
-        out.header.stamp = self.get_clock().now().to_msg()
-        self.obstacle_pub.publish(out)
+        if self.obstacle_pub is not None:
+            header = grid.header
+            header.frame_id = self.frame
+            out = point_cloud2.create_cloud_xyz32(header, pts3) if pts3 else PointCloud2()
+            out.header = header
+            out.header.stamp = self.get_clock().now().to_msg()
+            self.obstacle_pub.publish(out)
 
     def _target_cb(self, msg: PointStamped) -> None:
         # The perception node already publishes target in base_link by design.
@@ -155,14 +176,17 @@ class PotentialAStarPlannerNode(Node):
     def _timer_cb(self) -> None:
         now = self.get_clock().now()
         inflated, potential = self._build_maps()
-        self.occupancy_pub.publish(self._to_grid_msg(inflated, None, now, as_potential=False))
-        self.potential_pub.publish(self._to_grid_msg(inflated, potential, now, as_potential=True))
+        if self.occupancy_pub is not None:
+            self.occupancy_pub.publish(self._to_grid_msg(inflated, None, now, as_potential=False))
+        if self.potential_pub is not None:
+            self.potential_pub.publish(self._to_grid_msg(inflated, potential, now, as_potential=True))
 
         target_xy = self._fresh_target_xy(now)
         if target_xy is None:
             self.path_pub.publish(self._path_msg([(0.0, 0.0)], now))
             return
-        self._publish_point(self.target_pub, target_xy, now)
+        if self.target_pub is not None:
+            self._publish_point(self.target_pub, target_xy, now)
 
         if self._front_obstacle_too_close():
             if now - self._last_emergency_warn_time > Duration(seconds=1.0):

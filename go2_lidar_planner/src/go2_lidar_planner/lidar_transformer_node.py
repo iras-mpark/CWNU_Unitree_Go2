@@ -49,6 +49,7 @@ class LidarTransformerNode(Node):
         self.declare_parameter("dynamic_pitch_max_correction_rad", 0.25)
         self.declare_parameter("dynamic_pitch_hold_last_on_fail", True)
         self.declare_parameter("dynamic_pitch_debug_topic", "~/debug")
+        self.declare_parameter("publish_dynamic_pitch_debug", False)
 
         # RANSAC parameters used only for estimating floor pitch in the already
         # transformed base_link-like cloud.
@@ -87,7 +88,11 @@ class LidarTransformerNode(Node):
         self._last_plane_info = "not_run"
 
         self.pub = self.create_publisher(PointCloud2, self.output_topic, 10)
-        self.debug_pub = self.create_publisher(String, str(self.get_parameter("dynamic_pitch_debug_topic").value), 5)
+        self.debug_pub = (
+            self.create_publisher(String, str(self.get_parameter("dynamic_pitch_debug_topic").value), 5)
+            if bool(self.get_parameter("publish_dynamic_pitch_debug").value)
+            else None
+        )
         self.create_subscription(PointCloud2, self.input_topic, self._cloud_cb, 10)
         self.tf_pub = StaticTransformBroadcaster(self)
         self._broadcast_static_tf()
@@ -238,6 +243,8 @@ class LidarTransformerNode(Node):
         if now - self._last_debug_time < Duration(seconds=1.0):
             return
         self._last_debug_time = now
+        if self.debug_pub is None:
+            return
         self.debug_pub.publish(
             String(
                 data=(

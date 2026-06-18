@@ -80,6 +80,17 @@ class LidarAccumulatorNode(Node):
         self.declare_parameter("rear_self_filter_marker_topic", "/rear_self_filter/box")
         self.declare_parameter("rear_self_filter_points_topic", "/rear_self_filter/filtered_points")
 
+        # Accumulated cloud visualization controls.  The full accumulated cloud
+        # can be very heavy over Wi-Fi, so RViz should normally subscribe to the
+        # downsampled debug cloud instead.
+        self.declare_parameter("publish_accumulated_cloud", False)
+        self.declare_parameter("publish_accumulated_debug_cloud", True)
+        self.declare_parameter("accumulated_debug_cloud_topic", "/utlidar/accumulated_cloud_debug")
+        self.declare_parameter("accumulated_debug_cloud_stride", 6)
+        self.declare_parameter("accumulated_debug_cloud_max_points", 3000)
+        self.declare_parameter("accumulated_debug_cloud_rate_hz", 5.0)
+        self.declare_parameter("publish_accumulator_debug_status", False)
+
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.output_topic = str(self.get_parameter("output_topic").value)
         self.history_duration = Duration(seconds=max(0.02, float(self.get_parameter("history_duration").value)))
@@ -110,8 +121,22 @@ class LidarAccumulatorNode(Node):
         self.publish_rear_viz = bool(self.get_parameter("publish_rear_self_filter_visualization").value)
         self.rear_marker_topic = str(self.get_parameter("rear_self_filter_marker_topic").value)
         self.rear_points_topic = str(self.get_parameter("rear_self_filter_points_topic").value)
+        self.publish_full_accumulated_cloud = bool(self.get_parameter("publish_accumulated_cloud").value)
+        self.publish_accumulated_debug_cloud = bool(self.get_parameter("publish_accumulated_debug_cloud").value)
+        self.accumulated_debug_cloud_topic = str(self.get_parameter("accumulated_debug_cloud_topic").value)
+        self.publish_accumulator_debug_status = bool(self.get_parameter("publish_accumulator_debug_status").value)
+        self._last_accumulated_debug_cloud_time = self.get_clock().now() - Duration(seconds=10.0)
         self.create_subscription(PointCloud2, self.input_topic, self._cloud_cb, 10)
-        self.pub = self.create_publisher(PointCloud2, self.output_topic, 10)
+        self.pub = (
+            self.create_publisher(PointCloud2, self.output_topic, 10)
+            if self.publish_full_accumulated_cloud
+            else None
+        )
+        self.debug_cloud_pub = (
+            self.create_publisher(PointCloud2, self.accumulated_debug_cloud_topic, 5)
+            if self.publish_accumulated_debug_cloud
+            else None
+        )
         self.occupancy_pub = self.create_publisher(OccupancyGrid, self.occupancy_grid_topic, 10)
         if self.publish_rear_viz:
             self.rear_filter_marker_pub = self.create_publisher(Marker, self.rear_marker_topic, 5)
@@ -119,12 +144,18 @@ class LidarAccumulatorNode(Node):
         else:
             self.rear_filter_marker_pub = None
             self.rear_filter_points_pub = None
-        self.debug_pub = self.create_publisher(String, "~/debug", 5)
+        self.debug_pub = (
+            self.create_publisher(String, "~/debug", 5)
+            if self.publish_accumulator_debug_status
+            else None
+        )
         self.create_timer(1.0 / self.publish_rate_hz, self._timer_cb)
         self.get_logger().info(
             f"LiDAR accumulator: {self.input_topic} -> {self.output_topic}, "
-            f"ogm={self.occupancy_grid_topic}, window={self.history_duration.nanoseconds/1e9:.2f}s, "
-            f"max_clouds={self.max_clouds}, ground_ransac={bool(self.get_parameter('use_ground_ransac_filter').value)}"
+            f"debug_cloud={self.accumulated_debug_cloud_topic}, ogm={self.occupancy_grid_topic}, "
+            f"window={self.history_duration.nanoseconds/1e9:.2f}s, max_clouds={self.max_clouds}, "
+            f"full_cloud={self.publish_full_accumulated_cloud}, debug_cloud_pub={self.publish_accumulated_debug_cloud}, "
+            f"ground_ransac={bool(self.get_parameter('use_ground_ransac_filter').value)}"
         )
 
     def _effective_obstacle_z_bounds(self) -> Tuple[float, float, float]:
@@ -165,18 +196,13 @@ class LidarAccumulatorNode(Node):
         header = Header()
         header.stamp = now.to_msg()
         header.frame_id = self.frame_id
-        if all_points and self.fields:
-            msg = point_cloud2.create_cloud(header, self.fields, all_points)
-        elif all_points:
-            msg = point_cloud2.create_cloud_xyz32(header, all_points)
-        else:
-            msg = PointCloud2()
-            msg.header = header
-        self.pub.publish(msg)
+        if self.pub is not None:
+            self.pub.publish(self._make_full_cloud_msg(header, all_points))
+        self._publish_accumulated_debug_cloud(header, all_points, now)
         self.occupancy_pub.publish(self._build_occupancy_grid(all_points, header))
         self._publish_rear_self_filter_visualization(header)
 
-        if now - self.last_debug > Duration(seconds=1.0):
+        if self.debug_pub is not None and now - self.last_debug > Duration(seconds=1.0):
             self.last_debug = now
             z_min_pos, z_min_neg, z_max = self._effective_obstacle_z_bounds()
             r_min = float(self.get_parameter("min_obstacle_range_m").value)
@@ -192,6 +218,43 @@ class LidarAccumulatorNode(Node):
                     )
                 )
             )
+
+    def _make_full_cloud_msg(self, header: Header, points: List[Tuple[float, ...]]) -> PointCloud2:
+        if points and self.fields:
+            return point_cloud2.create_cloud(header, self.fields, points)
+        if points:
+            return point_cloud2.create_cloud_xyz32(header, points)
+        msg = PointCloud2()
+        msg.header = header
+        return msg
+
+    def _publish_accumulated_debug_cloud(
+        self, header: Header, points: List[Tuple[float, ...]], now: Time
+    ) -> None:
+        if self.debug_cloud_pub is None:
+            return
+        rate_hz = float(self.get_parameter("accumulated_debug_cloud_rate_hz").value)
+        if rate_hz <= 0.0:
+            return
+        if now - self._last_accumulated_debug_cloud_time < Duration(seconds=1.0 / rate_hz):
+            return
+        self._last_accumulated_debug_cloud_time = now
+
+        stride = max(1, int(self.get_parameter("accumulated_debug_cloud_stride").value))
+        max_points = int(self.get_parameter("accumulated_debug_cloud_max_points").value)
+        xyz = [
+            (float(p[0]), float(p[1]), float(p[2]))
+            for i, p in enumerate(points)
+            if i % stride == 0
+        ]
+        if max_points > 0 and len(xyz) > max_points:
+            # Deterministic uniform subsampling keeps the cloud representative
+            # while bounding message size over wireless RViz connections.
+            indices = np.linspace(0, len(xyz) - 1, num=max_points, dtype=np.int64)
+            xyz = [xyz[int(i)] for i in indices]
+        cloud = point_cloud2.create_cloud_xyz32(header, xyz) if xyz else PointCloud2()
+        cloud.header = header
+        self.debug_cloud_pub.publish(cloud)
 
     def _build_occupancy_grid(self, points: List[Tuple[float, ...]], header: Header) -> OccupancyGrid:
         r_min = float(self.get_parameter("min_obstacle_range_m").value)

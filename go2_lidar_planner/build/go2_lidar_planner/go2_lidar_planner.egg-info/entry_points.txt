@@ -1,6 +1,0 @@
-[console_scripts]
-go2_path_follower_node = go2_lidar_planner.go2_path_follower_node:main
-lidar_accumulator_node = go2_lidar_planner.lidar_accumulator_node:main
-lidar_transformer_node = go2_lidar_planner.lidar_transformer_node:main
-potential_astar_planner_node = go2_lidar_planner.potential_astar_planner_node:main
-

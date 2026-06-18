@@ -41,7 +41,7 @@ def generate_launch_description():
         DeclareLaunchArgument('accumulator_publish_rate_hz', default_value='30.0'),
         DeclareLaunchArgument('planner_publish_rate_hz', default_value='30.0'),
         DeclareLaunchArgument('ogm_min_points_per_cell', default_value='2'),
-        DeclareLaunchArgument('min_obstacle_range_m', default_value='-0.01'),
+        DeclareLaunchArgument('min_obstacle_range_m', default_value='0.3'),
 
         # Planner / follower.
         DeclareLaunchArgument('follow_distance_m', default_value='1.0'),

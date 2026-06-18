@@ -23,6 +23,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header, String
+from visualization_msgs.msg import Marker
 
 PlaneFit = Tuple[np.ndarray, float, int, float]
 
@@ -75,6 +76,9 @@ class LidarAccumulatorNode(Node):
         self.declare_parameter("rear_self_filter_x_size_m", 0.30)
         self.declare_parameter("rear_self_filter_y_abs_m", 0.20)
         self.declare_parameter("rear_self_filter_height_m", 0.30)
+        self.declare_parameter("publish_rear_self_filter_visualization", True)
+        self.declare_parameter("rear_self_filter_marker_topic", "/rear_self_filter/box")
+        self.declare_parameter("rear_self_filter_points_topic", "/rear_self_filter/filtered_points")
 
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.output_topic = str(self.get_parameter("output_topic").value)
@@ -100,9 +104,21 @@ class LidarAccumulatorNode(Node):
         self._last_obstacle_hits = 0
         self._last_self_filtered_points = 0
         self._last_used_fallback = False
+        self._last_ground_normal: Optional[np.ndarray] = None
+        self._last_ground_d = 0.0
+        self._last_rear_self_filtered_xyz: List[Tuple[float, float, float]] = []
+        self.publish_rear_viz = bool(self.get_parameter("publish_rear_self_filter_visualization").value)
+        self.rear_marker_topic = str(self.get_parameter("rear_self_filter_marker_topic").value)
+        self.rear_points_topic = str(self.get_parameter("rear_self_filter_points_topic").value)
         self.create_subscription(PointCloud2, self.input_topic, self._cloud_cb, 10)
         self.pub = self.create_publisher(PointCloud2, self.output_topic, 10)
         self.occupancy_pub = self.create_publisher(OccupancyGrid, self.occupancy_grid_topic, 10)
+        if self.publish_rear_viz:
+            self.rear_filter_marker_pub = self.create_publisher(Marker, self.rear_marker_topic, 5)
+            self.rear_filter_points_pub = self.create_publisher(PointCloud2, self.rear_points_topic, 5)
+        else:
+            self.rear_filter_marker_pub = None
+            self.rear_filter_points_pub = None
         self.debug_pub = self.create_publisher(String, "~/debug", 5)
         self.create_timer(1.0 / self.publish_rate_hz, self._timer_cb)
         self.get_logger().info(
@@ -158,6 +174,7 @@ class LidarAccumulatorNode(Node):
             msg.header = header
         self.pub.publish(msg)
         self.occupancy_pub.publish(self._build_occupancy_grid(all_points, header))
+        self._publish_rear_self_filter_visualization(header)
 
         if now - self.last_debug > Duration(seconds=1.0):
             self.last_debug = now
@@ -184,6 +201,7 @@ class LidarAccumulatorNode(Node):
         hit_counts = [0] * (self.width * self.height)
         self._last_obstacle_hits = 0
         self._last_self_filtered_points = 0
+        self._last_rear_self_filtered_xyz = []
 
         xyz = self._points_to_xyz_array(points)
         fit = self._fit_ground_plane(xyz) if bool(self.get_parameter("use_ground_ransac_filter").value) else None
@@ -191,6 +209,8 @@ class LidarAccumulatorNode(Node):
             self._last_ground_ok = True
             self._last_used_fallback = False
             normal, d, inliers, ratio = fit
+            self._last_ground_normal = normal
+            self._last_ground_d = float(d)
             self._last_ground_info = (
                 f"plane_n=({normal[0]:.3f},{normal[1]:.3f},{normal[2]:.3f}), d={d:.3f}, "
                 f"inliers={inliers}, ratio={ratio:.2f}"
@@ -199,6 +219,8 @@ class LidarAccumulatorNode(Node):
             self._last_ground_ok = False
             self._last_used_fallback = True
             normal, d = None, 0.0
+            self._last_ground_normal = None
+            self._last_ground_d = 0.0
             self._last_ground_info = "ground_plane_not_found"
 
         for point in points:
@@ -209,6 +231,7 @@ class LidarAccumulatorNode(Node):
 
             if self._is_rear_self_filter_point(x, y, z, normal, d):
                 self._last_self_filtered_points += 1
+                self._last_rear_self_filtered_xyz.append((x, y, z))
                 continue
 
             if normal is not None:
@@ -234,6 +257,50 @@ class LidarAccumulatorNode(Node):
         grid.info.origin.orientation.w = 1.0
         grid.data = [100 if count >= min_hits else 0 for count in hit_counts]
         return grid
+
+
+    def _publish_rear_self_filter_visualization(self, header: Header) -> None:
+        if not self.publish_rear_viz:
+            return
+
+        enabled = bool(self.get_parameter("rear_self_filter_enabled").value)
+        x_center = float(self.get_parameter("rear_self_filter_x_center_m").value)
+        x_size = abs(float(self.get_parameter("rear_self_filter_x_size_m").value))
+        y_abs = abs(float(self.get_parameter("rear_self_filter_y_abs_m").value))
+        max_h = float(self.get_parameter("rear_self_filter_height_m").value)
+
+        marker = Marker()
+        marker.header = header
+        marker.ns = "rear_self_filter"
+        marker.id = 0
+        marker.type = Marker.CUBE
+        marker.action = Marker.ADD if (enabled and x_size > 0.0 and y_abs > 0.0 and max_h > 0.0) else Marker.DELETE
+        marker.pose.position.x = x_center
+        marker.pose.position.y = 0.0
+        marker.pose.position.z = self._ground_z_at(x_center, 0.0) + 0.5 * max_h
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = max(0.001, x_size)
+        marker.scale.y = max(0.001, 2.0 * y_abs)
+        marker.scale.z = max(0.001, max_h)
+        # Semi-transparent red box: points inside this volume are removed before
+        # the 2-D obstacle map is generated.
+        marker.color.r = 1.0
+        marker.color.g = 0.05
+        marker.color.b = 0.05
+        marker.color.a = 0.28
+        marker.lifetime = Duration(seconds=0.5).to_msg()
+        if self.rear_filter_marker_pub is not None:
+            self.rear_filter_marker_pub.publish(marker)
+
+        if self.rear_filter_points_pub is not None:
+            cloud = point_cloud2.create_cloud_xyz32(header, self._last_rear_self_filtered_xyz)
+            self.rear_filter_points_pub.publish(cloud)
+
+    def _ground_z_at(self, x: float, y: float) -> float:
+        normal = self._last_ground_normal
+        if normal is None or abs(float(normal[2])) < 1e-6:
+            return 0.0
+        return float(-(float(normal[0]) * x + float(normal[1]) * y + self._last_ground_d) / float(normal[2]))
 
     def _height_above_ground(self, x: float, y: float, z: float, normal: Optional[np.ndarray], d: float) -> float:
         if normal is None:

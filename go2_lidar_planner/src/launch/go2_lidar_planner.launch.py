@@ -87,6 +87,9 @@ def generate_launch_description():
         DeclareLaunchArgument('rear_self_filter_x_size_m', default_value='0.30'),
         DeclareLaunchArgument('rear_self_filter_y_abs_m', default_value='0.20'),
         DeclareLaunchArgument('rear_self_filter_height_m', default_value='0.30'),
+        DeclareLaunchArgument('publish_rear_self_filter_visualization', default_value='true'),
+        DeclareLaunchArgument('rear_self_filter_marker_topic', default_value='/rear_self_filter/box'),
+        DeclareLaunchArgument('rear_self_filter_points_topic', default_value='/rear_self_filter/filtered_points'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),
         DeclareLaunchArgument('clear_target_on_status_lost', default_value='true'),
@@ -205,6 +208,9 @@ def generate_launch_description():
             'rear_self_filter_x_size_m': ParameterValue(LaunchConfiguration('rear_self_filter_x_size_m'), value_type=float),
             'rear_self_filter_y_abs_m': ParameterValue(LaunchConfiguration('rear_self_filter_y_abs_m'), value_type=float),
             'rear_self_filter_height_m': ParameterValue(LaunchConfiguration('rear_self_filter_height_m'), value_type=float),
+            'publish_rear_self_filter_visualization': ParameterValue(LaunchConfiguration('publish_rear_self_filter_visualization'), value_type=bool),
+            'rear_self_filter_marker_topic': LaunchConfiguration('rear_self_filter_marker_topic'),
+            'rear_self_filter_points_topic': LaunchConfiguration('rear_self_filter_points_topic'),
         }],
     )
 

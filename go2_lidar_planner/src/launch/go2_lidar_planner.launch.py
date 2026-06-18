@@ -79,6 +79,14 @@ def generate_launch_description():
         DeclareLaunchArgument('ground_center_strip_y_abs_m', default_value='0.30'),
         DeclareLaunchArgument('ground_center_strip_min_height_m', default_value='0.10'),
         DeclareLaunchArgument('ground_filter_max_height_m', default_value='1.20'),
+        # Exclude low self/leg LiDAR returns in a tunable rear-side cuboid
+        # from the 2-D obstacle map.  The cuboid is centered behind base_link
+        # by default: x=-0.10 m, x-size=0.30 m, |y|<=0.20 m, floor~0.30 m.
+        DeclareLaunchArgument('rear_self_filter_enabled', default_value='true'),
+        DeclareLaunchArgument('rear_self_filter_x_center_m', default_value='-0.10'),
+        DeclareLaunchArgument('rear_self_filter_x_size_m', default_value='0.30'),
+        DeclareLaunchArgument('rear_self_filter_y_abs_m', default_value='0.20'),
+        DeclareLaunchArgument('rear_self_filter_height_m', default_value='0.30'),
         DeclareLaunchArgument('api_control_enabled', default_value='true'),
         DeclareLaunchArgument('require_target_status', default_value='false'),
         DeclareLaunchArgument('clear_target_on_status_lost', default_value='true'),
@@ -192,6 +200,11 @@ def generate_launch_description():
             'ground_center_strip_y_abs_m': ParameterValue(LaunchConfiguration('ground_center_strip_y_abs_m'), value_type=float),
             'ground_center_strip_min_height_m': ParameterValue(LaunchConfiguration('ground_center_strip_min_height_m'), value_type=float),
             'ground_filter_max_height_m': ParameterValue(LaunchConfiguration('ground_filter_max_height_m'), value_type=float),
+            'rear_self_filter_enabled': ParameterValue(LaunchConfiguration('rear_self_filter_enabled'), value_type=bool),
+            'rear_self_filter_x_center_m': ParameterValue(LaunchConfiguration('rear_self_filter_x_center_m'), value_type=float),
+            'rear_self_filter_x_size_m': ParameterValue(LaunchConfiguration('rear_self_filter_x_size_m'), value_type=float),
+            'rear_self_filter_y_abs_m': ParameterValue(LaunchConfiguration('rear_self_filter_y_abs_m'), value_type=float),
+            'rear_self_filter_height_m': ParameterValue(LaunchConfiguration('rear_self_filter_height_m'), value_type=float),
         }],
     )
 

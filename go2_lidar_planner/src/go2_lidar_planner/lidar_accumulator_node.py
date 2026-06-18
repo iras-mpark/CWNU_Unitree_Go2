@@ -67,6 +67,15 @@ class LidarAccumulatorNode(Node):
         self.declare_parameter("ground_center_strip_min_height_m", 0.10)
         self.declare_parameter("ground_filter_max_height_m", 1.20)
 
+        # Self/leg return exclusion box near the rear side of the robot.
+        # This removes low-height points from the robot legs/body that appear
+        # behind the base_link origin from the 2-D obstacle map only.
+        self.declare_parameter("rear_self_filter_enabled", True)
+        self.declare_parameter("rear_self_filter_x_center_m", -0.10)
+        self.declare_parameter("rear_self_filter_x_size_m", 0.30)
+        self.declare_parameter("rear_self_filter_y_abs_m", 0.20)
+        self.declare_parameter("rear_self_filter_height_m", 0.30)
+
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.output_topic = str(self.get_parameter("output_topic").value)
         self.history_duration = Duration(seconds=max(0.02, float(self.get_parameter("history_duration").value)))
@@ -89,6 +98,7 @@ class LidarAccumulatorNode(Node):
         self._last_ground_ok = False
         self._last_ground_info = "not_run"
         self._last_obstacle_hits = 0
+        self._last_self_filtered_points = 0
         self._last_used_fallback = False
         self.create_subscription(PointCloud2, self.input_topic, self._cloud_cb, 10)
         self.pub = self.create_publisher(PointCloud2, self.output_topic, 10)
@@ -157,6 +167,7 @@ class LidarAccumulatorNode(Node):
                 String(
                     data=(
                         f"clouds={len(self.history)}, points={len(all_points)}, obstacle_hits={self._last_obstacle_hits}, "
+                        f"rear_self_filtered={self._last_self_filtered_points}, "
                         f"ground_ransac={bool(self.get_parameter('use_ground_ransac_filter').value)}, "
                         f"ground_ok={self._last_ground_ok}, fallback_height_filter={self._last_used_fallback}, "
                         f"{self._last_ground_info}, legacy_z_min(+x)={z_min_pos:.2f}, "
@@ -172,6 +183,7 @@ class LidarAccumulatorNode(Node):
         min_hits = max(1, int(self.get_parameter("min_points_per_cell").value))
         hit_counts = [0] * (self.width * self.height)
         self._last_obstacle_hits = 0
+        self._last_self_filtered_points = 0
 
         xyz = self._points_to_xyz_array(points)
         fit = self._fit_ground_plane(xyz) if bool(self.get_parameter("use_ground_ransac_filter").value) else None
@@ -193,6 +205,10 @@ class LidarAccumulatorNode(Node):
             x, y, z = float(point[0]), float(point[1]), float(point[2])
             distance_xy = math.hypot(x, y)
             if distance_xy < r_min or distance_xy > r_max:
+                continue
+
+            if self._is_rear_self_filter_point(x, y, z, normal, d):
+                self._last_self_filtered_points += 1
                 continue
 
             if normal is not None:
@@ -219,10 +235,36 @@ class LidarAccumulatorNode(Node):
         grid.data = [100 if count >= min_hits else 0 for count in hit_counts]
         return grid
 
+    def _height_above_ground(self, x: float, y: float, z: float, normal: Optional[np.ndarray], d: float) -> float:
+        if normal is None:
+            return z
+        return float(np.dot(normal, np.array([x, y, z], dtype=np.float64)) + d)
+
+    def _is_rear_self_filter_point(
+        self, x: float, y: float, z: float, normal: Optional[np.ndarray], d: float
+    ) -> bool:
+        if not bool(self.get_parameter("rear_self_filter_enabled").value):
+            return False
+        x_center = float(self.get_parameter("rear_self_filter_x_center_m").value)
+        x_size = abs(float(self.get_parameter("rear_self_filter_x_size_m").value))
+        y_abs = abs(float(self.get_parameter("rear_self_filter_y_abs_m").value))
+        max_h = float(self.get_parameter("rear_self_filter_height_m").value)
+        if x_size <= 0.0 or y_abs <= 0.0 or max_h <= 0.0:
+            return False
+        x_min = x_center - 0.5 * x_size
+        x_max = x_center + 0.5 * x_size
+        if not (x_min <= x <= x_max and abs(y) <= y_abs):
+            return False
+        height = self._height_above_ground(x, y, z, normal, d)
+        # Remove low returns from floor level up to the configured height.  A
+        # small negative tolerance is intentional because fitted planes and
+        # transformed points can have a few centimeters of noise.
+        return height <= max_h
+
     def _is_ground_relative_obstacle(self, x: float, y: float, z: float, normal: np.ndarray, d: float) -> bool:
         # Signed height above the floor plane.  The fitted normal is forced to
         # have positive z, so positive signed distance means above the floor.
-        height = float(np.dot(normal, np.array([x, y, z], dtype=np.float64)) + d)
+        height = self._height_above_ground(x, y, z, normal, d)
         max_h = float(self.get_parameter("ground_filter_max_height_m").value)
         if height > max_h:
             return False

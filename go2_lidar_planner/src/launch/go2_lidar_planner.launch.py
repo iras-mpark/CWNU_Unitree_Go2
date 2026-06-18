@@ -83,10 +83,10 @@ def generate_launch_description():
         # from the 2-D obstacle map.  The cuboid is centered behind base_link
         # by default: x=-0.10 m, x-size=0.30 m, |y|<=0.20 m, floor~0.30 m.
         DeclareLaunchArgument('rear_self_filter_enabled', default_value='true'),
-        DeclareLaunchArgument('rear_self_filter_x_center_m', default_value='-0.10'),
-        DeclareLaunchArgument('rear_self_filter_x_size_m', default_value='0.30'),
-        DeclareLaunchArgument('rear_self_filter_y_abs_m', default_value='0.20'),
-        DeclareLaunchArgument('rear_self_filter_height_m', default_value='0.30'),
+        DeclareLaunchArgument('rear_self_filter_x_center_m', default_value='-0.20'),
+        DeclareLaunchArgument('rear_self_filter_x_size_m', default_value='0.40'),
+        DeclareLaunchArgument('rear_self_filter_y_abs_m', default_value='0.40'),
+        DeclareLaunchArgument('rear_self_filter_height_m', default_value='0.40'),
         DeclareLaunchArgument('publish_rear_self_filter_visualization', default_value='true'),
         DeclareLaunchArgument('rear_self_filter_marker_topic', default_value='/rear_self_filter/box'),
         DeclareLaunchArgument('rear_self_filter_points_topic', default_value='/rear_self_filter/filtered_points'),
